@@ -1,0 +1,82 @@
+{
+  "id": "io.github.sn-kinos.translator",
+  "name": "Translator",
+  "description": "Korean–English message translation.",
+  "version": "0.1.0",
+  "min_server_version": "11.3.0",
+  "server": {
+    "executables": {
+      "linux-amd64": "server/dist/plugin-linux-amd64",
+      "linux-arm64": "server/dist/plugin-linux-arm64"
+    }
+  },
+  "webapp": {
+    "bundle_path": "webapp/plugin.js"
+  },
+  "settings_schema": {
+    "header": "Mattermost Translator",
+    "settings": [
+      {
+        "key": "GeminiAPIKey",
+        "display_name": "Gemini API Key",
+        "type": "text",
+        "secret": true,
+        "help_text": "API key used only by the server for Gemini requests."
+      },
+      {
+        "key": "PrimaryModel",
+        "display_name": "Primary Model",
+        "help_text": "Gemini model ID to try first.",
+        "type": "text",
+        "default": "gemini-3.7-flash"
+      },
+      {
+        "key": "FallbackModel",
+        "display_name": "Fallback Model",
+        "help_text": "Model ID used after primary retries fail.",
+        "type": "text",
+        "default": "gemini-3.6-flash"
+      },
+      {
+        "key": "AutomaticTeam",
+        "display_name": "Automatic Translation Team",
+        "help_text": "Enter the team name from its URL, not its display name or ID.",
+        "type": "text"
+      },
+      {
+        "key": "AutomaticSourceUsers",
+        "display_name": "Automatic Source Users",
+        "help_text": "Comma-separated usernames whose messages are translated from English to Korean.",
+        "type": "text"
+      },
+      {
+        "key": "IncludeDirectMessages",
+        "display_name": "Include Direct Messages",
+        "help_text": "Include DMs and group DMs when all active participants belong to the configured team.",
+        "type": "bool",
+        "default": true
+      },
+      {
+        "key": "SharedGlossary",
+        "display_name": "Shared Glossary",
+        "type": "longtext",
+        "help_text": "Applies in both directions. Up to 200 entries, 100 characters per term.",
+        "default": ""
+      },
+      {
+        "key": "MaximumConcurrentGeminiRequests",
+        "display_name": "Maximum Concurrent Gemini Requests",
+        "help_text": "Concurrent Gemini request limit (1–64), shared by automatic and command translations.",
+        "type": "number",
+        "default": 8
+      },
+      {
+        "key": "TotalRequestTimeoutSeconds",
+        "display_name": "Total Request Timeout Seconds",
+        "help_text": "Total timeout including retries and fallback. Must be 10 seconds in this version.",
+        "type": "number",
+        "default": 10
+      }
+    ]
+  }
+}

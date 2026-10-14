@@ -1,0 +1,10 @@
+{
+  "id": "io.github.sn-kinos.shift-actions",
+  "name": "Shift Actions",
+  "description": "Hold Shift over a message to show quick actions, like Discord.",
+  "version": "0.1.0",
+  "min_server_version": "11.11.0",
+  "webapp": {
+    "bundle_path": "webapp/plugin.js"
+  }
+}
