@@ -24,10 +24,14 @@ jobs:
           go-version-file: translator/go.mod
           cache-dependency-path: translator/go.sum
       - name: Install release tools
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
+        # GitHub runners need sudo; self-hosted Gitea runners usually run as root without it.
+        run: |
+          sudo=$(command -v sudo || true)
+          $sudo apt-get update && $sudo apt-get install -y --no-install-recommends ripgrep
       - name: Build and verify
         run: make verify
-      # Deploys only from main, and only when the repository sets the MATTERMOST_URL variable.
+      # Deploys only from main, and only where the MATTERMOST_URL variable is set (for example a
+      # self-hosted Gitea pull mirror of this repository; Gitea also reads .github/workflows).
       - name: Upload and enable plugins
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.MATTERMOST_URL != ''
         run: |

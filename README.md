@@ -15,7 +15,9 @@ make -C translator dist   # 플러그인 하나만
 
 ## 배포
 
-`.github/workflows/ci.yml`이 push와 pull request마다 `make verify`를 돌립니다. 저장소에 변수 `MATTERMOST_URL`(예: `https://chat.example.com`)과 시크릿 `MATTERMOST_TOKEN`(시스템 관리자 토큰)을 넣으면, main에 push할 때 두 플러그인을 그 서버에 올리고 켭니다.
+`.github/workflows/ci.yml`이 push와 pull request마다 `make verify`를 돌립니다. 변수 `MATTERMOST_URL`(예: `https://chat.example.com`)과 시크릿 `MATTERMOST_TOKEN`(시스템 관리자 토큰)을 넣은 저장소에서는 main에 push될 때 두 플러그인을 그 서버에 올리고 켭니다.
+
+자체 Gitea에서 배포하려면 이 저장소를 pull mirror로 가져오고 미러 저장소에 위 변수와 시크릿을 넣습니다. Gitea는 미러가 동기화될 때 push 이벤트로 Actions를 실행하고, `.gitea/workflows`가 없으면 `.github/workflows`를 읽습니다.
 
 ## 라이선스
 
