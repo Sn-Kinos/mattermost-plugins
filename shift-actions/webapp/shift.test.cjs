@@ -70,14 +70,14 @@ function load({roles = 'system_user', crt = 'on', following = false} = {}) {
 const mine = {id: 'p1', user_id: 'me', root_id: '', is_pinned: false};
 const theirs = {id: 'p1', user_id: 'other', root_id: '', reply_count: 2, is_pinned: true};
 
-test('buttons appear only while Shift is held and hide recent reactions, app actions and More', async () => {
+test('buttons appear only while Shift is held and hide every original toolbar item', async () => {
     const t = load();
     await t.render(mine);
     assert.deepEqual(t.labels(), []);
     await t.key('keydown', true);
     assert.deepEqual(t.labels(), ['전달하기', '메시지 구독', '안 읽음 표시', '알림', '공지하기', '텍스트 복사', '링크 복사', '편집', '삭제']);
     const style = [...t.window.document.querySelectorAll('style')].map(s => s.textContent).join('');
-    assert.match(style, /\.post-menu:has\(\.shift-actions\) > li:has\(\.post-menu__emoticon, \[id\*="_actions_button_"\], \[id\^="CENTER_button_"\]/);
+    assert.match(style, /\.post-menu:has\(\.shift-actions\) > li:not\(:has\(\.shift-actions\)\)/);
     await t.key('keyup', false);
     assert.deepEqual(t.labels(), []);
     await t.key('keydown', true);

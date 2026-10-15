@@ -5,10 +5,10 @@
     const locations = ['CENTER', 'RHS_ROOT', 'RHS_COMMENT', 'SEARCH'];
     const moreButtons = locations.map(location => `[id^="${location}_button_"]`);
 
-    // While Shift is held, recent reactions, app actions and More collapse in place; More still
-    // anchors the menus the plugin buttons open.
+    // While Shift is held the original toolbar items collapse in place, so More still anchors
+    // the menus the plugin buttons open.
     const style = document.createElement('style');
-    style.textContent = `.post-menu:has(.shift-actions) > li:has(.post-menu__emoticon, [id*="_actions_button_"], ${moreButtons.join(', ')}) ` +
+    style.textContent = '.post-menu:has(.shift-actions) > li:not(:has(.shift-actions)) ' +
         '{width: 0; min-width: 0; padding: 0; margin: 0; border: 0; overflow: hidden;}\n' +
         'body.shift-actions-proxy .MuiPopover-root:has([id*="_dropdown_"]), ' +
         'body.shift-actions-proxy .modal:has(#deletePostModalButton), body.shift-actions-proxy .modal-backdrop {opacity: 0;}';
