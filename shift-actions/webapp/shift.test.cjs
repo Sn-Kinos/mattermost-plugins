@@ -5,17 +5,14 @@ const {JSDOM} = require('jsdom');
 
 // Mattermost's Korean strings for the message ids the plugin uses.
 const ko = {
-    'post_info.reply': '답글', 'rhs_root.mobile.add_reaction': '반응 추가',
-    'rhs_root.mobile.flag': '중요 지정', 'rhs_root.mobile.unflag': '중요 메시지 해제',
     'forward_post_button.label': '전달하기', 'threading.threadMenu.followMessage': '메시지 구독',
     'threading.threadMenu.unfollow': '글타래 구독 해제', 'post_info.unread': '안 읽음 표시',
     'post_info.post_reminder.menu': '알림', 'post_info.pin': '공지하기', 'post_info.unpin': '공지 해제하기',
     'post_info.copy': '텍스트 복사', 'post_info.permalink': '링크 복사', 'post_info.edit': '편집', 'post_info.del': '삭제',
 };
 
-function load({roles = 'system_user', crt = 'on', following = false, saved = false} = {}) {
-    const dom = new JSDOM('<ul class="post-menu"><li><button id="CENTER_reaction_p1"></button></li><li id="root"></li>' +
-        '<li><button id="CENTER_button_p1"></button></li></ul>',
+function load({roles = 'system_user', crt = 'on', following = false} = {}) {
+    const dom = new JSDOM('<ul class="post-menu"><li id="root"></li><li><button id="CENTER_button_p1"></button></li></ul>',
         {runScripts: 'outside-only', url: 'https://chat.example/team-a/channels/town'});
     const {window} = dom;
     global.window = window;
@@ -26,10 +23,7 @@ function load({roles = 'system_user', crt = 'on', following = false, saved = fal
     const state = {entities: {
         users: {currentUserId: 'me', profiles: {me: {id: 'me', roles}}},
         general: {config: {CollapsedThreads: 'default_off'}},
-        preferences: {myPreferences: {
-            'display_settings--collapsed_reply_threads': {value: crt},
-            ...(saved && {'flagged_post--p1': {value: 'true'}}),
-        }},
+        preferences: {myPreferences: {'display_settings--collapsed_reply_threads': {value: crt}}},
         threads: {threads: {p1: {is_following: following}}},
     }};
     // The hidden More button opens a menu with these items, like Mattermost's dot menu.
@@ -54,7 +48,6 @@ function load({roles = 'system_user', crt = 'on', following = false, saved = fal
             window.document.body.append(item);
         }
     });
-    window.document.getElementById('CENTER_reaction_p1').addEventListener('click', () => events.push('reaction'));
     window.document.addEventListener('keydown', event => event.key === 'Escape' && events.push('escape'));
     let Component;
     window.registerPlugin = (id, plugin) => plugin.initialize({
@@ -77,15 +70,14 @@ function load({roles = 'system_user', crt = 'on', following = false, saved = fal
 const mine = {id: 'p1', user_id: 'me', root_id: '', is_pinned: false};
 const theirs = {id: 'p1', user_id: 'other', root_id: '', reply_count: 2, is_pinned: true};
 
-test('buttons appear only while Shift is held and replace the original toolbar items', async () => {
+test('buttons appear only while Shift is held and hide recent reactions, app actions and More', async () => {
     const t = load();
     await t.render(mine);
     assert.deepEqual(t.labels(), []);
     await t.key('keydown', true);
-    assert.deepEqual(t.labels(), ['답글', '전달하기', '반응 추가', '메시지 구독', '안 읽음 표시', '중요 지정', '알림',
-        '공지하기', '텍스트 복사', '링크 복사', '편집', '삭제']);
+    assert.deepEqual(t.labels(), ['전달하기', '메시지 구독', '안 읽음 표시', '알림', '공지하기', '텍스트 복사', '링크 복사', '편집', '삭제']);
     const style = [...t.window.document.querySelectorAll('style')].map(s => s.textContent).join('');
-    assert.match(style, /\.post-menu:has\(\.shift-actions\) > li:not\(:has\(\.shift-actions\)\)/);
+    assert.match(style, /\.post-menu:has\(\.shift-actions\) > li:has\(\.post-menu__emoticon, \[id\*="_actions_button_"\], \[id\^="CENTER_button_"\]/);
     await t.key('keyup', false);
     assert.deepEqual(t.labels(), []);
     await t.key('keydown', true);
@@ -93,17 +85,15 @@ test('buttons appear only while Shift is held and replace the original toolbar i
     assert.deepEqual(t.labels(), []);
 });
 
-test("others' posts hide edit and delete unless system admin, and follow, saved and pin state show", async () => {
-    const t = load({following: true, saved: true});
+test("others' posts hide edit and delete unless system admin, and follow and pin state show", async () => {
+    const t = load({following: true});
     await t.render(theirs);
     await t.key('keydown', true);
-    assert.deepEqual(t.labels(), ['답글', '전달하기', '반응 추가', '글타래 구독 해제', '안 읽음 표시', '중요 메시지 해제', '알림',
-        '공지 해제하기', '텍스트 복사', '링크 복사']);
+    assert.deepEqual(t.labels(), ['전달하기', '글타래 구독 해제', '안 읽음 표시', '알림', '공지 해제하기', '텍스트 복사', '링크 복사']);
     const admin = load({roles: 'system_user system_admin', crt: 'off'});
     await admin.render(theirs);
     await admin.key('keydown', true);
-    assert.deepEqual(admin.labels(), ['답글', '전달하기', '반응 추가', '안 읽음 표시', '중요 지정', '알림',
-        '공지 해제하기', '텍스트 복사', '링크 복사', '편집', '삭제']);
+    assert.deepEqual(admin.labels(), ['전달하기', '안 읽음 표시', '알림', '공지 해제하기', '텍스트 복사', '링크 복사', '편집', '삭제']);
 });
 
 test('menu buttons click the matching item in the hidden More menu and release its focus', async () => {
@@ -133,14 +123,6 @@ test('a missing menu item closes the menu', async () => {
     await t.click('공지 해제하기');
     assert.deepEqual(t.events, ['open:shift-actions-proxy', 'escape']);
     assert.equal(t.window.document.body.className, '');
-});
-
-test('add reaction clicks the collapsed toolbar reaction button', async () => {
-    const t = load();
-    await t.render(mine);
-    await t.key('keydown', true);
-    await t.click('반응 추가');
-    assert.deepEqual(t.events, ['reaction']);
 });
 
 test('delete confirms its dialog invisibly', async () => {

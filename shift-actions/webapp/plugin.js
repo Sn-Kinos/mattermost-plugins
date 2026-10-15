@@ -5,10 +5,10 @@
     const locations = ['CENTER', 'RHS_ROOT', 'RHS_COMMENT', 'SEARCH'];
     const moreButtons = locations.map(location => `[id^="${location}_button_"]`);
 
-    // While Shift is held the original toolbar items collapse in place, so More and the reaction
-    // button still anchor the menu and emoji picker the plugin buttons open.
+    // While Shift is held, recent reactions, app actions and More collapse in place; More still
+    // anchors the menus the plugin buttons open.
     const style = document.createElement('style');
-    style.textContent = '.post-menu:has(.shift-actions) > li:not(:has(.shift-actions)) ' +
+    style.textContent = `.post-menu:has(.shift-actions) > li:has(.post-menu__emoticon, [id*="_actions_button_"], ${moreButtons.join(', ')}) ` +
         '{width: 0; min-width: 0; padding: 0; margin: 0; border: 0; overflow: hidden;}\n' +
         'body.shift-actions-proxy .MuiPopover-root:has([id*="_dropdown_"]), ' +
         'body.shift-actions-proxy .modal:has(#deletePostModalButton), body.shift-actions-proxy .modal-backdrop {opacity: 0;}';
@@ -79,17 +79,11 @@
         const following = threads.threads[rootId]?.is_following;
         const thread = Boolean(post.root_id || post.reply_count);
         const follow = 'threading.threadMenu.' + (following ? 'unfollow' : 'follow') + (thread ? '' : 'Message');
-        const saved = preferences.myPreferences['flagged_post--' + post.id]?.value === 'true';
 
         const buttons = [
-            ['post_info.reply', 'Reply', 'icon-reply-outline', 'reply_to_post_'],
             ['forward_post_button.label', 'Forward', 'icon-arrow-right-bold-outline', 'forward_post_'],
-            ['rhs_root.mobile.add_reaction', 'Add Reaction', 'icon-emoticon-plus-outline', '_reaction_', 'toolbar'],
             crt && [follow, 'Follow', following ? 'icon-message-minus-outline' : 'icon-message-check-outline', 'follow_post_thread_'],
             ['post_info.unread', 'Mark as Unread', 'icon-mark-as-unread', 'unread_post_'],
-            saved ?
-                ['rhs_root.mobile.unflag', 'Remove from Saved', 'icon-bookmark', 'save_post_'] :
-                ['rhs_root.mobile.flag', 'Save Message', 'icon-bookmark-outline', 'save_post_'],
             ['post_info.post_reminder.menu', 'Remind', 'icon-clock-outline', 'remind_post_', 'submenu'],
             post.is_pinned ?
                 ['post_info.unpin', 'Unpin from Channel', 'icon-pin', 'unpin_post_'] :
@@ -109,10 +103,7 @@
                 'aria-label': label,
                 title: label,
                 style: mode === 'confirm' ? {color: 'var(--error-text)'} : undefined,
-                // The desktop More menu has no Add Reaction item, so that one clicks the collapsed toolbar button.
-                onClick: event => (mode === 'toolbar' ?
-                    event.currentTarget.closest('.post-menu').querySelector(`[id$="${item + post.id}"]`).click() :
-                    menuItem(event.currentTarget, item + post.id, mode)),
+                onClick: event => menuItem(event.currentTarget, item + post.id, mode),
             }, h('i', {className: 'icon icon--small ' + icon}));
         });
     };
