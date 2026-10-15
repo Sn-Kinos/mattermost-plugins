@@ -8,12 +8,8 @@ name: CI
   workflow_dispatch:
 
 jobs:
-  verify-and-deploy:
+  verify:
     runs-on: ubuntu-latest
-    env:
-      MATTERMOST_URL: ${{ vars.MATTERMOST_URL }}
-      MATTERMOST_TOKEN: ${{ secrets.MATTERMOST_TOKEN }}
-      PLUGINS: "translator/dist/io.github.sn-kinos.translator-0.1.0.tar.gz=io.github.sn-kinos.translator shift-actions/dist/io.github.sn-kinos.shift-actions-0.1.0.tar.gz=io.github.sn-kinos.shift-actions"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,33 +20,6 @@ jobs:
           go-version-file: translator/go.mod
           cache-dependency-path: translator/go.sum
       - name: Install release tools
-        # GitHub runners need sudo; self-hosted Gitea runners usually run as root without it.
-        run: |
-          sudo=$(command -v sudo || true)
-          $sudo apt-get update && $sudo apt-get install -y --no-install-recommends ripgrep
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
       - name: Build and verify
         run: make verify
-      # Deploys only from main, and only where the MATTERMOST_URL variable is set (for example a
-      # self-hosted Gitea pull mirror of this repository; Gitea also reads .github/workflows).
-      - name: Upload and enable plugins
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.MATTERMOST_URL != ''
-        run: |
-          set -eu
-          test -n "$MATTERMOST_TOKEN"
-          for entry in $PLUGINS; do
-            archive=${entry%%=*}
-            id=${entry#*=}
-            curl --fail-with-body --silent --show-error \
-              --header "Authorization: Bearer $MATTERMOST_TOKEN" \
-              --form force=true \
-              --form "plugin=@$archive" \
-              "$MATTERMOST_URL/api/v4/plugins"
-            curl --fail-with-body --silent --show-error \
-              --request POST \
-              --header "Authorization: Bearer $MATTERMOST_TOKEN" \
-              "$MATTERMOST_URL/api/v4/plugins/$id/enable"
-          done
-          curl --fail-with-body --silent --show-error \
-            --header "Authorization: Bearer $MATTERMOST_TOKEN" \
-            "$MATTERMOST_URL/api/v4/plugins/statuses" |
-            python3 -c 'import json, sys; print(json.dumps([s for s in json.load(sys.stdin) if s["plugin_id"].startswith("io.github.sn-kinos.")]))'
