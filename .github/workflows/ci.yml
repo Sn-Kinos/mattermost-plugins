@@ -18,7 +18,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: translator/go.mod
-          cache-dependency-path: translator/go.sum
+          cache-dependency-path: |
+            translator/go.sum
+            move-to-thread/go.sum
       - name: Install release tools
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
       - name: Build and verify

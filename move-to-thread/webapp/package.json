@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "scripts": {"test": "node --test *.test.cjs"},
+  "devDependencies": {
+    "jsdom": "26.1.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-intl": "6.8.9"
+  }
+}

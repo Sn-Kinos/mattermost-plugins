@@ -1,0 +1,16 @@
+{
+  "id": "io.github.sn-kinos.move-to-thread",
+  "name": "Move to Thread",
+  "description": "Select several messages and move them under another message as replies.",
+  "version": "0.1.0",
+  "min_server_version": "11.11.0",
+  "server": {
+    "executables": {
+      "linux-amd64": "server/dist/plugin-linux-amd64",
+      "linux-arm64": "server/dist/plugin-linux-arm64"
+    }
+  },
+  "webapp": {
+    "bundle_path": "webapp/plugin.js"
+  }
+}
