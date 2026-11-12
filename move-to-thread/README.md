@@ -37,4 +37,4 @@ make test   # webapp/node_modules가 필요: npm --prefix webapp ci
 make dist   # dist/io.github.sn-kinos.move-to-thread-0.1.0.tar.gz
 ```
 
-System Console → Plugin Management에서 위 파일을 올리고 켭니다. Mattermost 11.11.1에서 확인했습니다.
+System Console → Plugin Management에서 위 파일을 올리고 켭니다. Mattermost 11.11.1과 12.0.1에서 확인했습니다.
