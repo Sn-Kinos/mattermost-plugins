@@ -277,6 +277,13 @@ func TestMoveRejectsWithoutChangingAnything(t *testing.T) {
 			ids:    []string{"system0000000000000000000a"},
 			status: http.StatusBadRequest,
 		},
+		"burn-on-read message": {
+			setup: func(api *fakeAPI) {
+				api.add("burn00000000000000000000aa", me, channel, "", "secret", 250).Type = model.PostTypeBurnOnRead
+			},
+			ids:    []string{"burn00000000000000000000aa"},
+			status: http.StatusBadRequest,
+		},
 		"the target itself": {
 			ids:    []string{"aaaa00000000000000000000aa", "target00000000000000000000"},
 			status: http.StatusBadRequest,
@@ -350,4 +357,40 @@ func TestOnlyPostMoveIsServed(t *testing.T) {
 	request.Header.Set("Mattermost-User-Id", me)
 	(&Plugin{api: newFake()}).ServeHTTP(nil, recorder, request)
 	assert.Equal(t, http.StatusNotFound, recorder.Code)
+}
+
+func TestMoveRootWhoseReplyIsOlderThanIt(t *testing.T) {
+	api := newFake()
+	api.add("target00000000000000000000", alex, channel, "", "topic", 100)
+	api.add("aaaa00000000000000000000aa", me, channel, "", "moved earlier", 300)
+	api.add("aaaareply00000000000000000", alex, channel, "aaaa00000000000000000000aa", "older reply", 200)
+
+	response := moveRequest(t, api, "target00000000000000000000", "aaaa00000000000000000000aa")
+
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	assert.Equal(t, []string{"al:older reply", "me:moved earlier"}, api.thread("target00000000000000000000"))
+	assert.False(t, api.live("aaaa00000000000000000000aa"))
+	assert.False(t, api.live("aaaareply00000000000000000"))
+}
+
+func TestMoveKeepsOlderPostsAfterTheRoot(t *testing.T) {
+	api := newFake()
+	api.add("root0000000000000000000000", alex, channel, "", "topic", 500)
+	api.add("reply000000000000000000000", alex, channel, "root0000000000000000000000", "existing", 700)
+	api.add("aaaa00000000000000000000aa", me, channel, "", "much older", 200)
+	api.add("bbbb00000000000000000000bb", alex, channel, "", "older", 300)
+	api.add("cccc00000000000000000000cc", me, channel, "", "newer", 600)
+
+	response := moveRequest(t, api, "reply000000000000000000000",
+		"cccc00000000000000000000cc", "bbbb00000000000000000000bb", "aaaa00000000000000000000aa")
+
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	var times []string
+	for _, p := range api.posts {
+		if p.RootId == "root0000000000000000000000" && p.DeleteAt == 0 {
+			times = append(times, fmt.Sprintf("%d:%s", p.CreateAt, p.Message))
+		}
+	}
+	sort.Strings(times)
+	assert.Equal(t, []string{"501:much older", "502:older", "600:newer", "700:existing"}, times)
 }
