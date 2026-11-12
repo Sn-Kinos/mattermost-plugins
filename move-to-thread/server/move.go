@@ -29,10 +29,13 @@ func move(api API, userID, targetID string, postIDs []string) (string, error) {
 	if appErr != nil {
 		return "", reject(http.StatusBadRequest, "답글을 넣을 메시지를 찾지 못했습니다.")
 	}
-	rootID := target.RootId
-	if rootID == "" {
-		rootID = target.Id
+	root := target
+	if target.RootId != "" {
+		if root, appErr = api.GetPost(target.RootId); appErr != nil {
+			return "", reject(http.StatusBadRequest, "답글을 넣을 글타래를 찾지 못했습니다.")
+		}
 	}
+	rootID := root.Id
 	channelID := target.ChannelId
 	if _, appErr := api.GetChannelMember(channelID, userID); appErr != nil ||
 		!api.HasPermissionToChannel(userID, channelID, model.PermissionCreatePost) {
@@ -44,9 +47,12 @@ func move(api API, userID, targetID string, postIDs []string) (string, error) {
 		return "", err
 	}
 
+	// A thread reads top down, so posts older than the root move to just after it.
 	var copies []string
+	createAt := root.CreateAt
 	for _, post := range posts {
-		copyID, err := recreate(api, post, rootID)
+		createAt = max(createAt+1, post.CreateAt)
+		copyID, err := recreate(api, post, rootID, createAt)
 		if err != nil {
 			for i := len(copies) - 1; i >= 0; i-- {
 				_ = api.DeletePost(copies[i])
@@ -56,11 +62,16 @@ func move(api API, userID, targetID string, postIDs []string) (string, error) {
 		copies = append(copies, copyID)
 	}
 
-	// Newest first, so a thread's replies go before its root takes them along.
+	// Replies go before roots: deleting a root takes its replies along, and
+	// kept timestamps mean a reply can be older than its root.
 	failed := false
-	for i := len(posts) - 1; i >= 0; i-- {
-		if appErr := api.DeletePost(posts[i].Id); appErr != nil {
-			failed = true
+	for _, replies := range []bool{true, false} {
+		for _, post := range posts {
+			if (post.RootId != "") == replies {
+				if appErr := api.DeletePost(post.Id); appErr != nil {
+					failed = true
+				}
+			}
 		}
 	}
 	if failed {
@@ -83,8 +94,8 @@ func collect(api API, userID, channelID, rootID string, postIDs []string) ([]*mo
 			return reject(http.StatusBadRequest, "이미 이 글타래에 있는 메시지는 옮길 수 없습니다.")
 		case post.ChannelId != channelID:
 			return reject(http.StatusBadRequest, "같은 채널의 메시지만 옮길 수 있습니다.")
-		case post.IsSystemMessage():
-			return reject(http.StatusBadRequest, "시스템 메시지는 옮길 수 없습니다.")
+		case post.IsSystemMessage() || post.Type == model.PostTypeBurnOnRead:
+			return reject(http.StatusBadRequest, "시스템 메시지와 읽으면 사라지는 메시지는 옮길 수 없습니다.")
 		}
 		permission := model.PermissionDeleteOthersPosts
 		if post.UserId == userID {
@@ -133,9 +144,9 @@ func collect(api API, userID, channelID, rootID string, postIDs []string) ([]*mo
 	return posts, nil
 }
 
-// recreate posts a copy of post under rootID with the same author, time,
-// content, files, reactions and pin, and returns the copy's ID.
-func recreate(api API, post *model.Post, rootID string) (string, error) {
+// recreate posts a copy of post under rootID at createAt with the same
+// author, content, files, reactions and pin, and returns the copy's ID.
+func recreate(api API, post *model.Post, rootID string, createAt int64) (string, error) {
 	fileIDs := make([]string, 0, len(post.FileIds))
 	for _, fileID := range post.FileIds {
 		info, appErr := api.GetFileInfo(fileID)
@@ -163,7 +174,7 @@ func recreate(api API, post *model.Post, rootID string) (string, error) {
 		Hashtags:  post.Hashtags,
 		FileIds:   fileIDs,
 		IsPinned:  post.IsPinned,
-		CreateAt:  post.CreateAt,
+		CreateAt:  createAt,
 		EditAt:    post.EditAt,
 	})
 	if appErr != nil {

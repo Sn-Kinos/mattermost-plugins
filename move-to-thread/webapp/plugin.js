@@ -23,7 +23,7 @@
     const highlight = document.createElement('style');
     document.head.append(highlight);
 
-    const movable = post => post && !post.type?.startsWith('system_') && post.id !== post.pending_post_id &&
+    const movable = post => post && !post.type?.startsWith('system_') && post.type !== 'burn_on_read' && post.id !== post.pending_post_id &&
         post.state !== 'DELETED';
 
     const toggle = post => {
