@@ -205,6 +205,8 @@ func TestMoveCopiesPostsIntoTargetThreadAndDeletesOriginals(t *testing.T) {
 	assert.Equal(t, int64(250), copied.EditAt)
 	assert.True(t, copied.IsPinned)
 	assert.Equal(t, "kept", copied.GetProp("attachments"))
+	assert.Equal(t, true, copied.GetProp(model.PostPropsSilentNotification), "moving must not notify anyone")
+	assert.Nil(t, api.posts["aaaa00000000000000000000aa"].GetProp(model.PostPropsSilentNotification))
 	require.Len(t, copied.FileIds, 1)
 	assert.NotEqual(t, "oldfile0000000000000000000", copied.FileIds[0])
 	assert.Equal(t, "plan.pdf", api.files[copied.FileIds[0]].Name)
