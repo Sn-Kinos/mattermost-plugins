@@ -164,13 +164,21 @@ func recreate(api API, post *model.Post, rootID string, createAt int64) (string,
 		fileIDs = append(fileIDs, uploaded.Id)
 	}
 
+	// Moving is not news: silent_notification stops push, email, desktop
+	// notifications, mention counts and unread counts for the copy.
+	props := model.StringInterface{}
+	for key, value := range post.GetProps() {
+		props[key] = value
+	}
+	props[model.PostPropsSilentNotification] = true
+
 	created, appErr := api.CreatePost(&model.Post{
 		UserId:    post.UserId,
 		ChannelId: post.ChannelId,
 		RootId:    rootID,
 		Message:   post.Message,
 		Type:      post.Type,
-		Props:     post.GetProps(),
+		Props:     props,
 		Hashtags:  post.Hashtags,
 		FileIds:   fileIDs,
 		IsPinned:  post.IsPinned,
