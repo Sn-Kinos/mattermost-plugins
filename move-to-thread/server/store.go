@@ -42,6 +42,15 @@ func (s postgres) Relocate(p plan) (err error) {
 	}()
 	now := model.GetMillis()
 
+	var live bool
+	if err = tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM Posts WHERE Id = $1 AND RootId = '' AND DeleteAt = 0 FOR UPDATE)`,
+		p.RootID).Scan(&live); err != nil {
+		return err
+	}
+	if !live {
+		return fmt.Errorf("thread %s is gone", p.RootID)
+	}
+
 	ids := make([]string, len(p.Moves))
 	for i, m := range p.Moves {
 		ids[i] = m.ID
@@ -62,7 +71,14 @@ func (s postgres) Relocate(p plan) (err error) {
 	}
 
 	if len(p.FormerRoots) > 0 {
-		in, args := list(1, p.FormerRoots)
+		// Replies posted to a former root since the plan was made, and its
+		// deleted replies, follow it so no reply is left under a reply.
+		in, args := list(3, p.FormerRoots)
+		if _, err = tx.Exec(`UPDATE Posts SET RootId = $1, UpdateAt = $2 WHERE RootId IN `+in,
+			append([]any{p.RootID, now}, args...)...); err != nil {
+			return err
+		}
+		in, args = list(1, p.FormerRoots)
 		if _, err = tx.Exec(`DELETE FROM ThreadMemberships WHERE PostId IN `+in, args...); err != nil {
 			return err
 		}

@@ -65,6 +65,9 @@ func move(api API, db store, userID, targetID string, postIDs []string) (string,
 			return "", reject(http.StatusBadRequest, "답글을 넣을 글타래를 찾지 못했습니다.")
 		}
 	}
+	if root.IsSystemMessage() {
+		return "", reject(http.StatusBadRequest, "시스템 메시지에는 답글을 넣을 수 없습니다.")
+	}
 	channelID := target.ChannelId
 	if _, appErr := api.GetChannelMember(channelID, userID); appErr != nil ||
 		!api.HasPermissionToChannel(userID, channelID, model.PermissionCreatePost) {
