@@ -70,6 +70,55 @@
         }
     };
 
+    const collapsedThreads = state => {
+        const setting = state.entities.general.config.CollapsedThreads;
+        return setting === 'always_on' || (setting !== 'disabled' &&
+            (state.entities.preferences.myPreferences['display_settings--collapsed_reply_threads']?.value ||
+                (setting === 'default_on' ? 'on' : 'off')) === 'on');
+    };
+
+    // The server moved posts in place without telling Mattermost's own client,
+    // so take them out of where this screen has them and load their new thread.
+    const refresh = store => async ({data, broadcast}) => {
+        const state = store.getState();
+        const known = data.post_ids.map(id => state.entities.posts.posts[id]).filter(Boolean);
+        if (!known.length && !state.entities.posts.posts[data.root_id]) return;
+        const response = await fetch(`/api/v4/posts/${data.root_id}/thread`, {
+            credentials: 'same-origin', headers: {'X-Requested-With': 'XMLHttpRequest'},
+        });
+        if (!response.ok) return;
+        const thread = await response.json();
+        known.forEach(post => store.dispatch({type: 'POST_REMOVED', data: post}));
+        store.dispatch({type: 'RECEIVED_POSTS', data: thread, channelId: broadcast.channel_id});
+        store.dispatch({type: 'RECEIVED_POSTS_IN_THREAD', data: thread, rootId: data.root_id});
+
+        // Reply counts of the threads that gained or lost replies. Followed
+        // threads draw their count from their own record, not the post.
+        const crt = collapsedThreads(state);
+        const roots = [thread.posts[data.root_id]];
+        for (const id of data.source_roots || []) {
+            const source = await fetch(`/api/v4/posts/${id}`, {credentials: 'same-origin', headers: {'X-Requested-With': 'XMLHttpRequest'}});
+            if (!source.ok) continue;
+            const post = await source.json();
+            store.dispatch({type: 'RECEIVED_POST', data: post, features: {crtEnabled: crt}});
+            roots.push(post);
+        }
+        const followed = store.getState().entities.threads?.threads || {};
+        for (const post of roots.filter(post => post && followed[post.id])) {
+            store.dispatch({
+                type: 'RECEIVED_THREAD',
+                data: {thread: {...followed[post.id], reply_count: post.reply_count}, team_id: state.entities.teams.currentTeamId},
+            });
+        }
+        if (crt) return;
+        const order = data.post_ids.filter(id => thread.posts[id]);
+        store.dispatch({
+            type: 'RECEIVED_POSTS_SINCE',
+            channelId: broadcast.channel_id,
+            data: {order, posts: Object.fromEntries(order.map(id => [id, thread.posts[id]]))},
+        });
+    };
+
     const button = (label, icon, onClick, active) => h('button', {
         key: label,
         type: 'button',
@@ -98,7 +147,7 @@
         if (!current.ids.length) return null;
         const count = current.ids.length;
         const text = current.targetId ?
-            `선택한 메시지 ${count}개를 이 메시지의 답글로 옮길까요? 원본은 지워지고 링크가 바뀝니다.` :
+            `선택한 메시지 ${count}개를 이 메시지의 답글로 옮길까요?` :
             `${count}개 선택됨 · 다른 메시지를 눌러 더 고르고, 넣을 메시지에서 + 말풍선 버튼을 누르세요.`;
         const action = (label, onClick, primary) => h('button', {
             type: 'button',
@@ -127,6 +176,7 @@
         initialize(registry, store) {
             registry.registerPostActionComponent(PostAction);
             registry.registerRootComponent(() => h(SelectionBar, {store}));
+            registry.registerWebSocketEventHandler(`custom_${pluginId}_moved`, refresh(store));
             const onClick = clickToToggle(store);
             document.addEventListener('click', onClick, true);
             let channelId = store.getState().entities.channels.currentChannelId;

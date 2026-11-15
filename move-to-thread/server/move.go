@@ -18,10 +18,40 @@ func (f *failure) Error() string { return f.message }
 
 func reject(status int, message string) error { return &failure{status, message} }
 
-// move recreates the posts as replies in the target's thread, oldest first, and
-// deletes the originals only after every copy exists. Mattermost cannot change
-// an existing post's root, so this is how its own thread move works too.
-func move(api API, userID, targetID string, postIDs []string) (string, error) {
+// relocation puts one existing post under the new root at CreateAt.
+type relocation struct {
+	ID       string
+	CreateAt int64
+}
+
+// plan is everything the database change needs: the posts to move, oldest
+// first, and the threads whose bookkeeping changes with them.
+type plan struct {
+	RootID     string
+	RootUserID string
+	ChannelID  string
+	Moves      []relocation
+	// FormerRoots were thread roots and become replies, so their own thread
+	// records go away.
+	FormerRoots []string
+	// SourceRoots lose the replies that move out of them.
+	SourceRoots []string
+	// Authors of the moved posts, who now take part in the root's thread.
+	Authors []string
+}
+
+// store changes the database.
+type store interface {
+	// Relocate applies the plan in one transaction.
+	Relocate(p plan) error
+	// ForgetEdits removes edit-history rows of postID saved since then.
+	ForgetEdits(postID string, since int64) error
+}
+
+// move puts the selected posts, and the replies of any selected root, under
+// the target's thread without creating or deleting a post. Mattermost's API
+// cannot change a post's root, so store does it in the database.
+func move(api API, db store, userID, targetID string, postIDs []string) (string, error) {
 	if len(postIDs) == 0 || len(postIDs) > maxPosts {
 		return "", reject(http.StatusBadRequest, "옮길 메시지를 1개에서 200개 사이로 골라 주세요.")
 	}
@@ -35,49 +65,73 @@ func move(api API, userID, targetID string, postIDs []string) (string, error) {
 			return "", reject(http.StatusBadRequest, "답글을 넣을 글타래를 찾지 못했습니다.")
 		}
 	}
-	rootID := root.Id
 	channelID := target.ChannelId
 	if _, appErr := api.GetChannelMember(channelID, userID); appErr != nil ||
 		!api.HasPermissionToChannel(userID, channelID, model.PermissionCreatePost) {
 		return "", reject(http.StatusForbidden, "이 채널에 글을 쓸 권한이 없습니다.")
 	}
 
-	posts, err := collect(api, userID, channelID, rootID, postIDs)
+	posts, err := collect(api, userID, channelID, root.Id, postIDs)
 	if err != nil {
 		return "", err
 	}
+	p := planMove(root, posts)
+	if err := db.Relocate(p); err != nil {
+		return "", reject(http.StatusInternalServerError, "메시지를 옮기지 못했습니다. 아무것도 바뀌지 않았습니다.")
+	}
 
-	// A thread reads top down, so posts older than the root move to just after it.
-	var copies []string
+	// Mattermost keeps the channel's latest post time in a cache for 15
+	// minutes and answers reloads from it with 304 Not Modified. Saving the
+	// root unchanged is the plugin API's only way to clear it; the save also
+	// leaves an edit-history row, which goes again.
+	since := model.GetMillis()
+	if _, appErr := api.UpdatePost(root); appErr == nil {
+		_ = db.ForgetEdits(root.Id, since)
+	}
+
+	ids := make([]string, len(p.Moves))
+	for i, m := range p.Moves {
+		ids[i] = m.ID
+	}
+	api.PublishWebSocketEvent("moved", map[string]any{"root_id": root.Id, "post_ids": ids, "source_roots": p.SourceRoots},
+		&model.WebsocketBroadcast{ChannelId: channelID})
+	return root.Id, nil
+}
+
+// planMove takes posts oldest first. A thread reads top down, so posts older
+// than the root move to just after it, keeping their order.
+func planMove(root *model.Post, posts []*model.Post) plan {
+	p := plan{RootID: root.Id, RootUserID: root.UserId, ChannelID: root.ChannelId}
+	moving := map[string]bool{}
+	for _, post := range posts {
+		moving[post.Id] = true
+	}
+	sources := map[string]bool{}
+	authors := map[string]bool{}
 	createAt := root.CreateAt
 	for _, post := range posts {
 		createAt = max(createAt+1, post.CreateAt)
-		copyID, err := recreate(api, post, rootID, createAt)
-		if err != nil {
-			for i := len(copies) - 1; i >= 0; i-- {
-				_ = api.DeletePost(copies[i])
-			}
-			return "", reject(http.StatusInternalServerError, "메시지를 옮기지 못했습니다. 원본은 그대로 있습니다.")
+		p.Moves = append(p.Moves, relocation{ID: post.Id, CreateAt: createAt})
+		authors[post.UserId] = true
+		switch {
+		case post.RootId == "":
+			p.FormerRoots = append(p.FormerRoots, post.Id)
+		case !moving[post.RootId]:
+			sources[post.RootId] = true
 		}
-		copies = append(copies, copyID)
 	}
+	p.SourceRoots = sortedKeys(sources)
+	p.Authors = sortedKeys(authors)
+	return p
+}
 
-	// Replies go before roots: deleting a root takes its replies along, and
-	// kept timestamps mean a reply can be older than its root.
-	failed := false
-	for _, replies := range []bool{true, false} {
-		for _, post := range posts {
-			if (post.RootId != "") == replies {
-				if appErr := api.DeletePost(post.Id); appErr != nil {
-					failed = true
-				}
-			}
-		}
+func sortedKeys(set map[string]bool) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
 	}
-	if failed {
-		return "", reject(http.StatusInternalServerError, "답글로 옮겼지만 원본 일부를 지우지 못했습니다.")
-	}
-	return rootID, nil
+	sort.Strings(keys)
+	return keys
 }
 
 // collect loads the selected posts plus the replies of any selected root,
@@ -142,59 +196,4 @@ func collect(api API, userID, channelID, rootID string, postIDs []string) ([]*mo
 		return posts[i].Id < posts[j].Id
 	})
 	return posts, nil
-}
-
-// recreate posts a copy of post under rootID at createAt with the same
-// author, content, files, reactions and pin, and returns the copy's ID.
-func recreate(api API, post *model.Post, rootID string, createAt int64) (string, error) {
-	fileIDs := make([]string, 0, len(post.FileIds))
-	for _, fileID := range post.FileIds {
-		info, appErr := api.GetFileInfo(fileID)
-		if appErr != nil {
-			return "", appErr
-		}
-		data, appErr := api.GetFile(fileID)
-		if appErr != nil {
-			return "", appErr
-		}
-		uploaded, appErr := api.UploadFile(data, post.ChannelId, info.Name)
-		if appErr != nil {
-			return "", appErr
-		}
-		fileIDs = append(fileIDs, uploaded.Id)
-	}
-
-	// Moving is not news: silent_notification stops push, email, desktop
-	// notifications, mention counts and unread counts for the copy.
-	props := model.StringInterface{}
-	for key, value := range post.GetProps() {
-		props[key] = value
-	}
-	props[model.PostPropsSilentNotification] = true
-
-	created, appErr := api.CreatePost(&model.Post{
-		UserId:    post.UserId,
-		ChannelId: post.ChannelId,
-		RootId:    rootID,
-		Message:   post.Message,
-		Type:      post.Type,
-		Props:     props,
-		Hashtags:  post.Hashtags,
-		FileIds:   fileIDs,
-		IsPinned:  post.IsPinned,
-		CreateAt:  createAt,
-		EditAt:    post.EditAt,
-	})
-	if appErr != nil {
-		return "", appErr
-	}
-
-	reactions, appErr := api.GetReactions(post.Id)
-	if appErr != nil {
-		return created.Id, nil
-	}
-	for _, reaction := range reactions {
-		_, _ = api.AddReaction(&model.Reaction{UserId: reaction.UserId, PostId: created.Id, EmojiName: reaction.EmojiName})
-	}
-	return created.Id, nil
 }

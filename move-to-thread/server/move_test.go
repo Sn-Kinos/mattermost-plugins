@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -23,31 +24,21 @@ const (
 
 type fakeAPI struct {
 	posts       map[string]*model.Post
-	files       map[string]*model.FileInfo
-	data        map[string][]byte
-	reactions   map[string][]*model.Reaction
 	members     map[string]bool
 	permissions map[string]bool
-	failCreate  int
-	created     int
-	nextID      int
+	events      []map[string]any
+	plans       []plan
+	updated     []string
+	forgotten   []string
+	failStore   bool
 }
 
 func newFake() *fakeAPI {
 	return &fakeAPI{
 		posts:       map[string]*model.Post{},
-		files:       map[string]*model.FileInfo{},
-		data:        map[string][]byte{},
-		reactions:   map[string][]*model.Reaction{},
 		members:     map[string]bool{channel: true, other: true},
 		permissions: map[string]bool{"create_post": true, "delete_post": true, "delete_others_posts": true},
-		failCreate:  -1,
 	}
-}
-
-func (f *fakeAPI) id() string {
-	f.nextID++
-	return fmt.Sprintf("new%023d", f.nextID)
 }
 
 func (f *fakeAPI) add(id, user, ch, root, message string, createAt int64) *model.Post {
@@ -86,53 +77,33 @@ func (f *fakeAPI) HasPermissionToChannel(userID, _ string, permission *model.Per
 	return userID == me && f.permissions[permission.Id]
 }
 
-func (f *fakeAPI) CreatePost(post *model.Post) (*model.Post, *model.AppError) {
-	if f.created == f.failCreate {
-		return nil, model.NewAppError("CreatePost", "failed", nil, "", http.StatusInternalServerError)
-	}
-	f.created++
-	saved := post.Clone()
-	saved.Id = f.id()
-	f.posts[saved.Id] = saved
-	return saved.Clone(), nil
+func (f *fakeAPI) PublishWebSocketEvent(event string, payload map[string]any, broadcast *model.WebsocketBroadcast) {
+	f.events = append(f.events, map[string]any{"event": event, "channel": broadcast.ChannelId,
+		"root_id": payload["root_id"], "post_ids": payload["post_ids"], "source_roots": payload["source_roots"]})
 }
 
-func (f *fakeAPI) DeletePost(id string) *model.AppError {
-	post, ok := f.posts[id]
-	if !ok || post.DeleteAt != 0 {
-		return model.NewAppError("DeletePost", "not_found", nil, "", http.StatusNotFound)
-	}
-	post.DeleteAt = 1
-	for _, reply := range f.posts {
-		if reply.RootId == id {
-			reply.DeleteAt = 1
-		}
-	}
+func (f *fakeAPI) UpdatePost(post *model.Post) (*model.Post, *model.AppError) {
+	f.updated = append(f.updated, post.Id+":"+post.Message)
+	return post, nil
+}
+
+func (f *fakeAPI) ForgetEdits(postID string, since int64) error {
+	f.forgotten = append(f.forgotten, postID)
 	return nil
 }
 
-func (f *fakeAPI) GetReactions(postID string) ([]*model.Reaction, *model.AppError) {
-	return f.reactions[postID], nil
-}
-
-func (f *fakeAPI) AddReaction(reaction *model.Reaction) (*model.Reaction, *model.AppError) {
-	f.reactions[reaction.PostId] = append(f.reactions[reaction.PostId], reaction)
-	return reaction, nil
-}
-
-func (f *fakeAPI) GetFileInfo(id string) (*model.FileInfo, *model.AppError) {
-	return f.files[id], nil
-}
-
-func (f *fakeAPI) GetFile(id string) ([]byte, *model.AppError) {
-	return f.data[id], nil
-}
-
-func (f *fakeAPI) UploadFile(data []byte, channelID, name string) (*model.FileInfo, *model.AppError) {
-	info := &model.FileInfo{Id: f.id(), ChannelId: channelID, Name: name}
-	f.files[info.Id] = info
-	f.data[info.Id] = data
-	return info, nil
+// Relocate stands in for the database: it puts each post under the new root
+// at the planned time, as the SQL does.
+func (f *fakeAPI) Relocate(p plan) error {
+	if f.failStore {
+		return errors.New("database unavailable")
+	}
+	for _, m := range p.Moves {
+		f.posts[m.ID].RootId = p.RootID
+		f.posts[m.ID].CreateAt = m.CreateAt
+	}
+	f.plans = append(f.plans, p)
+	return nil
 }
 
 // thread returns the live replies under root as "author:message" in thread order.
@@ -151,10 +122,6 @@ func (f *fakeAPI) thread(root string) []string {
 	return out
 }
 
-func (f *fakeAPI) live(id string) bool {
-	return f.posts[id] != nil && f.posts[id].DeleteAt == 0
-}
-
 func post(t *testing.T, api *fakeAPI, user string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	encoded, err := json.Marshal(body)
@@ -164,7 +131,7 @@ func post(t *testing.T, api *fakeAPI, user string, body any) *httptest.ResponseR
 		request.Header.Set("Mattermost-User-Id", user)
 	}
 	recorder := httptest.NewRecorder()
-	(&Plugin{api: api}).ServeHTTP(nil, recorder, request)
+	(&Plugin{api: api, store: api}).ServeHTTP(nil, recorder, request)
 	return recorder
 }
 
@@ -173,17 +140,10 @@ func moveRequest(t *testing.T, api *fakeAPI, target string, ids ...string) *http
 	return post(t, api, me, map[string]any{"target_id": target, "post_ids": ids})
 }
 
-func TestMoveCopiesPostsIntoTargetThreadAndDeletesOriginals(t *testing.T) {
+func TestMoveKeepsThePostsAndChangesOnlyTheirThread(t *testing.T) {
 	api := newFake()
 	api.add("target00000000000000000000", alex, channel, "", "topic", 100)
-	a := api.add("aaaa00000000000000000000aa", me, channel, "", "first", 200)
-	a.IsPinned = true
-	a.EditAt = 250
-	a.AddProp("attachments", "kept")
-	a.FileIds = []string{"oldfile0000000000000000000"}
-	api.files["oldfile0000000000000000000"] = &model.FileInfo{Id: "oldfile0000000000000000000", Name: "plan.pdf"}
-	api.data["oldfile0000000000000000000"] = []byte("pdf")
-	api.reactions[a.Id] = []*model.Reaction{{UserId: alex, PostId: a.Id, EmojiName: "+1"}}
+	api.add("aaaa00000000000000000000aa", me, channel, "", "first", 200)
 	api.add("bbbb00000000000000000000bb", alex, channel, "", "second", 300)
 
 	response := moveRequest(t, api, "target00000000000000000000", "bbbb00000000000000000000bb", "aaaa00000000000000000000aa")
@@ -191,29 +151,14 @@ func TestMoveCopiesPostsIntoTargetThreadAndDeletesOriginals(t *testing.T) {
 	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 	assert.JSONEq(t, `{"root_id":"target00000000000000000000"}`, response.Body.String())
 	assert.Equal(t, []string{"me:first", "al:second"}, api.thread("target00000000000000000000"))
-	assert.False(t, api.live("aaaa00000000000000000000aa"))
-	assert.False(t, api.live("bbbb00000000000000000000bb"))
-
-	var copied *model.Post
-	for _, p := range api.posts {
-		if p.Message == "first" && p.DeleteAt == 0 {
-			copied = p
-		}
-	}
-	require.NotNil(t, copied)
-	assert.Equal(t, int64(200), copied.CreateAt)
-	assert.Equal(t, int64(250), copied.EditAt)
-	assert.True(t, copied.IsPinned)
-	assert.Equal(t, "kept", copied.GetProp("attachments"))
-	assert.Equal(t, true, copied.GetProp(model.PostPropsSilentNotification), "moving must not notify anyone")
-	assert.Nil(t, api.posts["aaaa00000000000000000000aa"].GetProp(model.PostPropsSilentNotification))
-	require.Len(t, copied.FileIds, 1)
-	assert.NotEqual(t, "oldfile0000000000000000000", copied.FileIds[0])
-	assert.Equal(t, "plan.pdf", api.files[copied.FileIds[0]].Name)
-	assert.Equal(t, []byte("pdf"), api.data[copied.FileIds[0]])
-	require.Len(t, api.reactions[copied.Id], 1)
-	assert.Equal(t, alex, api.reactions[copied.Id][0].UserId)
-	assert.Equal(t, "+1", api.reactions[copied.Id][0].EmojiName)
+	assert.Equal(t, "target00000000000000000000", api.posts["aaaa00000000000000000000aa"].RootId, "the same post, not a copy")
+	assert.Equal(t, []string{"target00000000000000000000:topic"}, api.updated, "an unchanged save makes Mattermost drop its cached channel listing")
+	assert.Equal(t, []string{"target00000000000000000000"}, api.forgotten, "and the edit-history row that save leaves is removed")
+	assert.Len(t, api.posts, 3)
+	assert.Equal(t, []map[string]any{{
+		"event": "moved", "channel": channel, "root_id": "target00000000000000000000",
+		"post_ids": []string{"aaaa00000000000000000000aa", "bbbb00000000000000000000bb"}, "source_roots": []string{},
+	}}, api.events)
 }
 
 func TestMoveIntoReplyTargetUsesItsRoot(t *testing.T) {
@@ -333,31 +278,31 @@ func TestMoveRejectsWithoutChangingAnything(t *testing.T) {
 			assert.Equal(t, tc.status, response.Code, response.Body.String())
 			assert.Len(t, api.posts, before)
 			assert.Equal(t, threadBefore, api.thread("target00000000000000000000"))
-			assert.Equal(t, 0, api.created)
+			assert.Empty(t, api.plans)
+			assert.Empty(t, api.events)
+			assert.Empty(t, api.updated)
 		})
 	}
 }
 
-func TestMoveRollsBackCopiesWhenOneFails(t *testing.T) {
+func TestMoveReportsADatabaseFailureAndTellsNoOne(t *testing.T) {
 	api := newFake()
 	api.add("target00000000000000000000", alex, channel, "", "topic", 100)
 	api.add("aaaa00000000000000000000aa", me, channel, "", "first", 200)
-	api.add("bbbb00000000000000000000bb", me, channel, "", "second", 300)
-	api.failCreate = 1
+	api.failStore = true
 
-	response := moveRequest(t, api, "target00000000000000000000", "aaaa00000000000000000000aa", "bbbb00000000000000000000bb")
+	response := moveRequest(t, api, "target00000000000000000000", "aaaa00000000000000000000aa")
 
 	assert.Equal(t, http.StatusInternalServerError, response.Code)
-	assert.Empty(t, api.thread("target00000000000000000000"))
-	assert.True(t, api.live("aaaa00000000000000000000aa"))
-	assert.True(t, api.live("bbbb00000000000000000000bb"))
+	assert.JSONEq(t, `{"error":"메시지를 옮기지 못했습니다. 아무것도 바뀌지 않았습니다."}`, response.Body.String())
+	assert.Empty(t, api.events)
 }
 
 func TestOnlyPostMoveIsServed(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/move", nil)
 	request.Header.Set("Mattermost-User-Id", me)
-	(&Plugin{api: newFake()}).ServeHTTP(nil, recorder, request)
+	(&Plugin{api: newFake(), store: newFake()}).ServeHTTP(nil, recorder, request)
 	assert.Equal(t, http.StatusNotFound, recorder.Code)
 }
 
@@ -371,8 +316,7 @@ func TestMoveRootWhoseReplyIsOlderThanIt(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 	assert.Equal(t, []string{"al:older reply", "me:moved earlier"}, api.thread("target00000000000000000000"))
-	assert.False(t, api.live("aaaa00000000000000000000aa"))
-	assert.False(t, api.live("aaaareply00000000000000000"))
+	assert.Empty(t, api.thread("aaaa00000000000000000000aa"))
 }
 
 func TestMoveKeepsOlderPostsAfterTheRoot(t *testing.T) {
@@ -395,4 +339,32 @@ func TestMoveKeepsOlderPostsAfterTheRoot(t *testing.T) {
 	}
 	sort.Strings(times)
 	assert.Equal(t, []string{"501:much older", "502:older", "600:newer", "700:existing"}, times)
+}
+
+func TestMovePlanNamesEveryThreadToRecount(t *testing.T) {
+	api := newFake()
+	api.add("target00000000000000000000", alex, channel, "", "topic", 100)
+	api.add("aaaa00000000000000000000aa", me, channel, "", "question", 200)
+	api.add("aaaareply00000000000000000", alex, channel, "aaaa00000000000000000000aa", "answer", 300)
+	api.add("source0000000000000000000a", alex, channel, "", "other topic", 150)
+	api.add("sourcereply000000000000000", me, channel, "source0000000000000000000a", "stray reply", 400)
+
+	response := moveRequest(t, api, "target00000000000000000000", "aaaa00000000000000000000aa", "sourcereply000000000000000")
+
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.Len(t, api.plans, 1)
+	p := api.plans[0]
+	assert.Equal(t, "target00000000000000000000", p.RootID)
+	assert.Equal(t, alex, p.RootUserID)
+	assert.Equal(t, channel, p.ChannelID)
+	assert.Equal(t, []string{"aaaa00000000000000000000aa"}, p.FormerRoots)
+	assert.Equal(t, []string{"source0000000000000000000a"}, p.SourceRoots)
+	assert.Equal(t, []string{alex, me}, p.Authors)
+	require.Len(t, api.events, 1)
+	assert.Equal(t, []string{"source0000000000000000000a"}, api.events[0]["source_roots"])
+	assert.Equal(t, []relocation{
+		{ID: "aaaa00000000000000000000aa", CreateAt: 200},
+		{ID: "aaaareply00000000000000000", CreateAt: 300},
+		{ID: "sourcereply000000000000000", CreateAt: 400},
+	}, p.Moves)
 }
