@@ -231,6 +231,11 @@ func TestMoveRejectsWithoutChangingAnything(t *testing.T) {
 			ids:    []string{"burn00000000000000000000aa"},
 			status: http.StatusBadRequest,
 		},
+		"a system message as the target": {
+			setup:  func(api *fakeAPI) { api.posts["target00000000000000000000"].Type = model.PostTypeJoinChannel },
+			ids:    []string{"aaaa00000000000000000000aa"},
+			status: http.StatusBadRequest,
+		},
 		"the target itself": {
 			ids:    []string{"aaaa00000000000000000000aa", "target00000000000000000000"},
 			status: http.StatusBadRequest,
