@@ -7,6 +7,7 @@ import (
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
+	"github.com/mattermost/mattermost/server/public/pluginapi"
 )
 
 // API is the part of the Mattermost plugin API that moving posts needs.
@@ -15,22 +16,28 @@ type API interface {
 	GetPostThread(postID string) (*model.PostList, *model.AppError)
 	GetChannelMember(channelID, userID string) (*model.ChannelMember, *model.AppError)
 	HasPermissionToChannel(userID, channelID string, permission *model.Permission) bool
-	CreatePost(post *model.Post) (*model.Post, *model.AppError)
-	DeletePost(postID string) *model.AppError
-	GetReactions(postID string) ([]*model.Reaction, *model.AppError)
-	AddReaction(reaction *model.Reaction) (*model.Reaction, *model.AppError)
-	GetFileInfo(fileID string) (*model.FileInfo, *model.AppError)
-	GetFile(fileID string) ([]byte, *model.AppError)
-	UploadFile(data []byte, channelID, filename string) (*model.FileInfo, *model.AppError)
+	PublishWebSocketEvent(event string, payload map[string]any, broadcast *model.WebsocketBroadcast)
+	UpdatePost(post *model.Post) (*model.Post, *model.AppError)
 }
 
 type Plugin struct {
 	plugin.MattermostPlugin
-	api API
+	api   API
+	store store
 }
 
 func (p *Plugin) OnActivate() error {
 	p.api = p.API
+	client := pluginapi.NewClient(p.API, p.Driver)
+	if client.Store.DriverName() != model.DatabaseDriverPostgres {
+		p.store = unsupported{}
+		return nil
+	}
+	db, err := client.Store.GetMasterDB()
+	if err != nil {
+		return err
+	}
+	p.store = postgres{db: db}
 	return nil
 }
 
@@ -55,7 +62,7 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	rootID, err := move(p.api, userID, request.TargetID, request.PostIDs)
+	rootID, err := move(p.api, p.store, userID, request.TargetID, request.PostIDs)
 	w.Header().Set("Content-Type", "application/json")
 	var failed *failure
 	if errors.As(err, &failed) {
