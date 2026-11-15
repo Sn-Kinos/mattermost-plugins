@@ -564,3 +564,35 @@ func TestCreateAttachment(t *testing.T) {
 	assert.Equal(t, "delete", deleteAction.Integration.Context["action"])
 	assert.Equal(t, messageID, deleteAction.Integration.Context["id"])
 }
+
+func TestBuild_ListNumbersAndShortIDsMatchDeleteOrder(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockStore := mock.NewMockStore(ctrl)
+	mockChannel := mock.NewMockChannelService(ctrl)
+	service := NewListService(testutil.FakeLogger{}, mockStore, mockChannel)
+
+	userID := "user1"
+	at := time.Date(2026, 11, 16, 0, 0, 0, 0, time.UTC)
+	later := createTestMessage("bbbb2222-0000-4000-8000-000000000002", userID, "ch1", "later", "UTC", at.Add(time.Hour))
+	tieB := createTestMessage("cccc3333-0000-4000-8000-000000000003", userID, "ch1", "tie b", "UTC", at)
+	tieA := createTestMessage("aaaa1111-0000-4000-8000-000000000001", userID, "ch1", "tie a", "UTC", at)
+	info := &ports.ChannelInfo{ChannelID: "ch1", ChannelType: model.ChannelTypeOpen, ChannelLink: "~town-square"}
+
+	mockStore.EXPECT().ListUserMessageIDs(userID).Return([]string{later.ID, tieB.ID, tieA.ID}, nil)
+	mockStore.EXPECT().GetScheduledMessage(later.ID).Return(later, nil)
+	mockStore.EXPECT().GetScheduledMessage(tieB.ID).Return(tieB, nil)
+	mockStore.EXPECT().GetScheduledMessage(tieA.ID).Return(tieA, nil)
+	mockChannel.EXPECT().GetInfoOrUnknown("ch1").Return(info)
+	mockChannel.EXPECT().MakeChannelLink(info).Return("in channel: ~town-square").Times(3)
+
+	response := service.Build(userID)
+
+	attachments, ok := response.Props["attachments"].([]*model.MessageAttachment)
+	require.True(t, ok)
+	require.Len(t, attachments, 3)
+	assert.Equal(t, "#1 · aaaa1111", attachments[0].Title)
+	assert.Equal(t, "#2 · cccc3333", attachments[1].Title)
+	assert.Equal(t, "#3 · bbbb2222", attachments[2].Title)
+}

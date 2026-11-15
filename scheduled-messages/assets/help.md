@@ -8,7 +8,7 @@ Switch to the channel or direct message where you want the message to appear, th
 
 `/schedule at <time> [on <date>] message <your message text>`
 
-*   Replace `<time>` with the send time (e.g., `at 9:00AM`, `at 17:30`, `at 3pm`). Your timezone setting in Mattermost is used.
+*   Replace `<time>` with the send time (e.g., `at 9:00AM`, `at 17:30`, `at 3pm`). Your timezone setting in Mattermost is used; if you have none, the plugin's default timezone (Asia/Seoul unless an admin changed it) is used.
 *   Optionally, use `on <date>` to specify a date. Replace `<date>` with the date in any of these formats:
     * `YYYY-MM-DD`: e.g. `on 2026-01-15`
     * `Day of week`: e.g. `on mon` or `on Monday`
@@ -39,6 +39,6 @@ Switch to the channel or direct message where you want the message to appear, th
 
 **Send scheduled messages now:** List your messages, click the `Send` button below the message.
 
-**Delete scheduled messages:** List your messages, click the `Delete` button below the message.
+**Delete scheduled messages:** List your messages, click the `Delete` button below the message, or type `/schedule delete <number|id>` with the number (`#1`) or short id shown above each message in `/schedule list`. Numbers change after a message is sent or deleted, so list again before deleting by number.
 
 **Get help:** `/schedule help` (Shows this information again).

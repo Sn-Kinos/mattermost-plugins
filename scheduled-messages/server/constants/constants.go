@@ -30,6 +30,8 @@ const (
 	SubcommandHelp = "help"
 	// SubcommandList is the list subcommand keyword.
 	SubcommandList = "list"
+	// SubcommandDelete is the delete subcommand keyword.
+	SubcommandDelete = "delete"
 	// SubcommandAt is the schedule subcommand keyword.
 	SubcommandAt = "at"
 	// AutocompleteDesc is the description used in autocomplete.
@@ -56,6 +58,12 @@ const (
 	AutocompleteListHint = ""
 	// AutocompleteListDesc describes the list subcommand.
 	AutocompleteListDesc = "List your scheduled messages"
+	// AutocompleteDeleteHint is the hint for the delete subcommand.
+	AutocompleteDeleteHint = "<number|id>"
+	// AutocompleteDeleteDesc describes the delete subcommand.
+	AutocompleteDeleteDesc = "Delete one of your scheduled messages by its list number or id"
+	// ShortIDLength is how many leading id characters the list shows and delete requires.
+	ShortIDLength = 8
 	// AutocompleteHelpHint is the hint for the help subcommand.
 	AutocompleteHelpHint = ""
 	// AutocompleteHelpDesc describes the help subcommand.
@@ -94,8 +102,10 @@ const (
 
 	// Time & Scheduling
 
-	// DefaultTimezone is the fallback timezone.
+	// DefaultTimezone is the fallback timezone when no other timezone loads.
 	DefaultTimezone = "UTC"
+	// DefaultConfiguredTimezone is used for users without a timezone when the plugin setting is empty.
+	DefaultConfiguredTimezone = "Asia/Seoul"
 	// DateParseLayoutYYYYMMDD is the YYYY-MM-DD date layout.
 	DateParseLayoutYYYYMMDD = "2006-01-02"
 

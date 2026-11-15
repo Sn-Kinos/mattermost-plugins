@@ -103,3 +103,21 @@ func TestFormatListAttachmentHeader(t *testing.T) {
 		}
 	})
 }
+
+func TestFormatListItemTitle(t *testing.T) {
+	if got := FormatListItemTitle(1, "aaaa1111-0000-4000-8000-000000000001"); got != "#1 · aaaa1111" {
+		t.Fatalf("FormatListItemTitle() = %q", got)
+	}
+	if got := FormatListItemTitle(12, "id3"); got != "#12 · id3" {
+		t.Fatalf("FormatListItemTitle() = %q", got)
+	}
+}
+
+func TestFormatDeleteSuccess(t *testing.T) {
+	ts := time.Date(2026, time.November, 17, 9, 0, 0, 0, time.UTC)
+	got := FormatDeleteSuccess(ts, "in channel: ~town-square")
+	want := "✅ Message scheduled for **Nov 17, 2026 9:00 AM** in channel: ~town-square has been deleted."
+	if got != want {
+		t.Fatalf("FormatDeleteSuccess() = %q, want %q", got, want)
+	}
+}

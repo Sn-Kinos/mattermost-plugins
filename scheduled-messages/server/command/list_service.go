@@ -49,41 +49,50 @@ func (l *ListService) Build(userID string) *model.CommandResponse {
 }
 
 func (l *ListService) loadMessages(userID string) ([]*types.ScheduledMessage, error) {
-	l.logger.Debug("Loading scheduled message IDs for user", "user_id", userID)
-	ids, err := l.store.ListUserMessageIDs(userID)
+	return loadUserMessages(l.logger, l.store, userID)
+}
+
+// loadUserMessages returns a user's scheduled messages in list order. `/schedule list`
+// numbers and `/schedule delete <number>` both index into this order.
+func loadUserMessages(logger ports.Logger, store ports.Store, userID string) ([]*types.ScheduledMessage, error) {
+	logger.Debug("Loading scheduled message IDs for user", "user_id", userID)
+	ids, err := store.ListUserMessageIDs(userID)
 	if err != nil {
-		l.logger.Error("Failed to list user message IDs", "user_id", userID, "error", err)
+		logger.Error("Failed to list user message IDs", "user_id", userID, "error", err)
 		return nil, err
 	}
-	l.logger.Debug("Found message IDs for user", "user_id", userID, "count", len(ids))
+	logger.Debug("Found message IDs for user", "user_id", userID, "count", len(ids))
 
 	msgs := []*types.ScheduledMessage{}
 	for _, id := range ids {
-		l.logger.Debug("Loading scheduled message details", "user_id", userID, "message_id", id)
-		msg, err := l.store.GetScheduledMessage(id)
+		logger.Debug("Loading scheduled message details", "user_id", userID, "message_id", id)
+		msg, err := store.GetScheduledMessage(id)
 		if err != nil {
 			// Log the error but continue trying to load other messages
-			l.logger.Error("Failed to get scheduled message details", "user_id", userID, "message_id", id, "error", err)
+			logger.Error("Failed to get scheduled message details", "user_id", userID, "message_id", id, "error", err)
 			continue
 		}
 		if msg == nil || msg.ID == "" {
-			l.logger.Warn("Scheduled message referenced in user index not found, cleaning up", "user_id", userID, "message_id", id)
+			logger.Warn("Scheduled message referenced in user index not found, cleaning up", "user_id", userID, "message_id", id)
 			// Attempt cleanup, log if cleanup fails but continue processing
-			if cleanupErr := l.store.CleanupMessageFromUserIndex(userID, id); cleanupErr != nil {
-				l.logger.Error("Failed to cleanup missing message from user index", "user_id", userID, "message_id", id, "error", cleanupErr)
+			if cleanupErr := store.CleanupMessageFromUserIndex(userID, id); cleanupErr != nil {
+				logger.Error("Failed to cleanup missing message from user index", "user_id", userID, "message_id", id, "error", cleanupErr)
 			}
 			continue
 		}
-		l.logger.Debug("Successfully loaded scheduled message", "user_id", userID, "message_id", msg.ID)
+		logger.Debug("Successfully loaded scheduled message", "user_id", userID, "message_id", msg.ID)
 		msgs = append(msgs, msg)
 	}
 
-	l.logger.Debug("Sorting loaded messages by post time", "user_id", userID, "count", len(msgs))
+	logger.Debug("Sorting loaded messages by post time", "user_id", userID, "count", len(msgs))
 	sort.Slice(msgs, func(i, j int) bool {
-		return msgs[i].PostAt.Before(msgs[j].PostAt)
+		if !msgs[i].PostAt.Equal(msgs[j].PostAt) {
+			return msgs[i].PostAt.Before(msgs[j].PostAt)
+		}
+		return msgs[i].ID < msgs[j].ID
 	})
 
-	l.logger.Debug("Finished loading and sorting messages for user", "user_id", userID, "count", len(msgs))
+	logger.Debug("Finished loading and sorting messages for user", "user_id", userID, "count", len(msgs))
 	return msgs, nil
 }
 
@@ -92,7 +101,7 @@ func (l *ListService) buildAttachments(msgs []*types.ScheduledMessage) []*model.
 	attachments := []*model.MessageAttachment{}
 	channelCache := make(map[string]*ports.ChannelInfo)
 
-	for _, m := range msgs {
+	for i, m := range msgs {
 		l.logger.Debug("Processing message for attachment", "message_id", m.ID, "channel_id", m.ChannelID)
 		if _, ok := channelCache[m.ChannelID]; !ok {
 			l.logger.Debug("Channel info not in cache, fetching", "channel_id", m.ChannelID)
@@ -108,7 +117,9 @@ func (l *ListService) buildAttachments(msgs []*types.ScheduledMessage) []*model.
 			m.MessageContent,
 			m.RootID != "",
 		)
-		attachments = append(attachments, createAttachment(header, m.ID))
+		attachment := createAttachment(header, m.ID)
+		attachment.Title = formatter.FormatListItemTitle(i+1, m.ID)
+		attachments = append(attachments, attachment)
 		l.logger.Debug("Created attachment for message", "message_id", m.ID)
 	}
 

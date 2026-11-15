@@ -26,6 +26,7 @@ const (
 	testMaxUserMsgs   = 5
 	testTimezone      = "America/New_York"
 	testDefaultTZ     = "UTC"
+	testConfiguredTZ  = "Asia/Seoul"
 	testChannelLink   = "~town-square"
 	testTeamName      = "Test Team"
 	testFormattedLink = "in channel: ~town-square"
@@ -61,6 +62,7 @@ func setupScheduleServiceTest(t *testing.T) (*ScheduleService, *testMocks) {
 		mocks.channel,
 		mocks.clock,
 		testMaxUserMsgs,
+		func() string { return testConfiguredTZ },
 	)
 	require.NotNil(t, service)
 	return service, mocks
@@ -118,13 +120,13 @@ func TestBuild_HappyPath(t *testing.T) {
 	assert.Equal(t, expectedSuccessMsg, resp.Text)
 }
 
-func TestBuild_TimezoneLogic_DefaultUsed_NoSettings(t *testing.T) {
+func TestBuild_TimezoneLogic_ConfiguredDefaultUsed_NoSettings(t *testing.T) {
 	service, mocks := setupScheduleServiceTest(t)
 	args := defaultArgs()
-	text := "at 3:00PM on 2024-01-16 message Hello UTC"
-	// 3 PM UTC on Jan 16
-	expectedPostAtUTC := time.Date(2024, 1, 16, 15, 0, 0, 0, time.UTC)
-	expectedPostAtLocal := expectedPostAtUTC
+	text := "at 9:00AM on 2024-01-16 message Hello KST"
+	// 9 AM KST on Jan 16 is midnight UTC on Jan 16
+	expectedPostAtUTC := time.Date(2024, 1, 16, 0, 0, 0, 0, time.UTC)
+	expectedPostAtLocal := time.Date(2024, 1, 16, 9, 0, 0, 0, testutil.MustLoadLocation(t, testConfiguredTZ))
 	channelInfo := &ports.ChannelInfo{ChannelID: testChannelID, ChannelLink: testChannelLink, TeamName: testTeamName, ChannelType: model.ChannelTypeOpen}
 
 	mocks.store.EXPECT().ListUserMessageIDs(testUserID).Return([]string{}, nil)
@@ -132,8 +134,8 @@ func TestBuild_TimezoneLogic_DefaultUsed_NoSettings(t *testing.T) {
 	mocks.store.EXPECT().GenerateMessageID().Return(testMsgID)
 	mocks.store.EXPECT().SaveScheduledMessage(testUserID, gomock.AssignableToTypeOf(&types.ScheduledMessage{})).
 		DoAndReturn(func(_ string, msg *types.ScheduledMessage) error {
-			assert.Equal(t, testDefaultTZ, msg.Timezone)
-			assert.True(t, expectedPostAtUTC.Equal(msg.PostAt))
+			assert.Equal(t, "Asia/Seoul", msg.Timezone)
+			assert.True(t, expectedPostAtUTC.Equal(msg.PostAt), "Expected %v, got %v", expectedPostAtUTC, msg.PostAt)
 			return nil
 		})
 	mocks.channel.EXPECT().GetInfoOrUnknown(testChannelID).Return(channelInfo)
@@ -143,7 +145,7 @@ func TestBuild_TimezoneLogic_DefaultUsed_NoSettings(t *testing.T) {
 
 	require.NotNil(t, resp)
 	assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
-	expectedSuccessMsg := formatter.FormatScheduleSuccess(expectedPostAtLocal, testDefaultTZ, testFormattedLink, false)
+	expectedSuccessMsg := formatter.FormatScheduleSuccess(expectedPostAtLocal, testConfiguredTZ, testFormattedLink, false)
 	assert.Equal(t, expectedSuccessMsg, resp.Text)
 }
 
@@ -298,8 +300,9 @@ func TestBuild_PreparationFailure_UserTimezoneFetchError(t *testing.T) {
 	service, mocks := setupScheduleServiceTest(t)
 	args := defaultArgs()
 	text := "at 3:00PM on 2024-01-16 message Hello world"
-	expectedPostAtUTC := time.Date(2024, 1, 16, 15, 0, 0, 0, time.UTC)
-	expectedPostAtLocal := expectedPostAtUTC
+	// 3 PM KST on Jan 16 is 6 AM UTC on Jan 16
+	expectedPostAtUTC := time.Date(2024, 1, 16, 6, 0, 0, 0, time.UTC)
+	expectedPostAtLocal := time.Date(2024, 1, 16, 15, 0, 0, 0, testutil.MustLoadLocation(t, testConfiguredTZ))
 	channelInfo := &ports.ChannelInfo{ChannelID: testChannelID, ChannelLink: testChannelLink, TeamName: testTeamName, ChannelType: model.ChannelTypeOpen}
 	fetchErr := errors.New("api error")
 
@@ -310,7 +313,7 @@ func TestBuild_PreparationFailure_UserTimezoneFetchError(t *testing.T) {
 		DoAndReturn(func(_ string, msg *types.ScheduledMessage) error {
 			assert.Equal(t, testMsgID, msg.ID)
 			assert.True(t, expectedPostAtUTC.Equal(msg.PostAt), "Expected %v, got %v", expectedPostAtUTC, msg.PostAt)
-			assert.Equal(t, testDefaultTZ, msg.Timezone)
+			assert.Equal(t, "Asia/Seoul", msg.Timezone)
 			return nil
 		})
 	mocks.channel.EXPECT().GetInfoOrUnknown(testChannelID).Return(channelInfo)
@@ -320,8 +323,8 @@ func TestBuild_PreparationFailure_UserTimezoneFetchError(t *testing.T) {
 
 	require.NotNil(t, resp)
 	assert.Equal(t, model.CommandResponseTypeEphemeral, resp.ResponseType)
-	expectedSuccessMsg := formatter.FormatScheduleSuccess(expectedPostAtLocal, testDefaultTZ, testFormattedLink, false)
-	assert.Equal(t, expectedSuccessMsg, resp.Text) // Response should show UTC
+	expectedSuccessMsg := formatter.FormatScheduleSuccess(expectedPostAtLocal, testConfiguredTZ, testFormattedLink, false)
+	assert.Equal(t, expectedSuccessMsg, resp.Text)
 }
 
 func TestBuild_PreparationFailure_InvalidUserTimezone(t *testing.T) {
@@ -403,4 +406,30 @@ func TestBuild_ValidationFailure_ErrorCheckingMaxUserMessages(t *testing.T) {
 	expectedErr := fmt.Errorf("failed to check message count: %w", storeErr)
 	expectedFormattedErr := formatter.FormatScheduleValidationError(expectedErr)
 	assert.Equal(t, expectedFormattedErr, resp.Text)
+}
+
+func TestBuild_TimezoneLogic_InvalidConfiguredDefault_FallsBackToUTC(t *testing.T) {
+	service, mocks := setupScheduleServiceTest(t)
+	service.defaultTimezone = func() string { return "Not/AZone" }
+	args := defaultArgs()
+	text := "at 3:00PM on 2024-01-16 message Hello world"
+	expectedPostAtUTC := time.Date(2024, 1, 16, 15, 0, 0, 0, time.UTC)
+	channelInfo := &ports.ChannelInfo{ChannelID: testChannelID, ChannelLink: testChannelLink, TeamName: testTeamName, ChannelType: model.ChannelTypeOpen}
+
+	mocks.store.EXPECT().ListUserMessageIDs(testUserID).Return([]string{}, nil)
+	mocks.userAPI.EXPECT().Get(testUserID).Return(&model.User{Timezone: map[string]string{}}, nil)
+	mocks.store.EXPECT().GenerateMessageID().Return(testMsgID)
+	mocks.store.EXPECT().SaveScheduledMessage(testUserID, gomock.AssignableToTypeOf(&types.ScheduledMessage{})).
+		DoAndReturn(func(_ string, msg *types.ScheduledMessage) error {
+			assert.Equal(t, "UTC", msg.Timezone)
+			assert.True(t, expectedPostAtUTC.Equal(msg.PostAt), "Expected %v, got %v", expectedPostAtUTC, msg.PostAt)
+			return nil
+		})
+	mocks.channel.EXPECT().GetInfoOrUnknown(testChannelID).Return(channelInfo)
+	mocks.channel.EXPECT().MakeChannelLink(channelInfo).Return(testFormattedLink)
+
+	resp := service.Build(args, text)
+
+	require.NotNil(t, resp)
+	assert.Equal(t, "✅ Scheduled message for Jan 16, 2024 3:00 PM (UTC) in channel: ~town-square", resp.Text)
 }

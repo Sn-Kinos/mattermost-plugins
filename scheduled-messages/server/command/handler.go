@@ -3,10 +3,13 @@ package command
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/apartmentlines/mattermost-plugin-poor-mans-scheduled-messages/internal/ports"
 	"github.com/apartmentlines/mattermost-plugin-poor-mans-scheduled-messages/server/constants"
+	"github.com/apartmentlines/mattermost-plugin-poor-mans-scheduled-messages/server/formatter"
 	"github.com/apartmentlines/mattermost-plugin-poor-mans-scheduled-messages/server/types"
 	"github.com/mattermost/mattermost/server/public/model"
 )
@@ -70,6 +73,9 @@ func (h *Handler) Execute(args *model.CommandArgs) (*model.CommandResponse, *mod
 	case strings.HasPrefix(commandText, constants.SubcommandList):
 		h.logger.Debug("Handling list subcommand", "user_id", args.UserId)
 		return h.BuildEphemeralList(args), nil
+	case strings.HasPrefix(commandText, constants.SubcommandDelete):
+		h.logger.Debug("Handling delete subcommand", "user_id", args.UserId)
+		return h.handleDelete(args.UserId, strings.TrimSpace(commandText[len(constants.SubcommandDelete):])), nil
 	default:
 		h.logger.Debug("Handling schedule subcommand", "user_id", args.UserId, "command_text", commandText)
 		return h.handleSchedule(args, commandText), nil
@@ -140,6 +146,10 @@ func (h *Handler) getScheduleAutocompleteData() *model.AutocompleteData {
 	at.AddTextArgument(constants.AutocompleteAtArgMsgName, constants.AutocompleteAtArgMsgHint, "")
 	schedule.AddCommand(at)
 
+	del := model.NewAutocompleteData(constants.SubcommandDelete, constants.AutocompleteDeleteHint, constants.AutocompleteDeleteDesc)
+	del.AddTextArgument("Number or id", constants.AutocompleteDeleteHint, "")
+	schedule.AddCommand(del)
+
 	list := model.NewAutocompleteData(constants.SubcommandList, constants.AutocompleteListHint, constants.AutocompleteListDesc)
 	schedule.AddCommand(list)
 
@@ -160,4 +170,73 @@ func (h *Handler) scheduleHelp() *model.CommandResponse {
 func (h *Handler) handleSchedule(args *model.CommandArgs, text string) *model.CommandResponse {
 	h.logger.Debug("Building schedule response", "user_id", args.UserId, "command_text", text)
 	return h.scheduleService.Build(args, text)
+}
+
+func (h *Handler) handleDelete(userID string, ref string) *model.CommandResponse {
+	if ref == "" || strings.ContainsAny(ref, " \t\n") {
+		return errorResponse(fmt.Sprintf("%s Usage: `/%s %s <number|id>`. Run `/%s %s` to see the numbers and ids.",
+			constants.EmojiError, constants.CommandTrigger, constants.SubcommandDelete, constants.CommandTrigger, constants.SubcommandList))
+	}
+	number, isNumber := listNumber(ref)
+	if !isNumber && len(ref) < constants.ShortIDLength {
+		return errorResponse(fmt.Sprintf("%s Use the list number or at least %d characters of the id, e.g. `/%s %s 1`.",
+			constants.EmojiError, constants.ShortIDLength, constants.CommandTrigger, constants.SubcommandDelete))
+	}
+
+	msgs, err := loadUserMessages(h.logger, h.store, userID)
+	if err != nil {
+		return errorResponse(fmt.Sprintf("%s Error retrieving message list: %v", constants.EmojiError, err))
+	}
+	target, resolveErr := resolveDeleteTarget(msgs, ref, number, isNumber)
+	if resolveErr != "" {
+		return errorResponse(fmt.Sprintf("%s %s", constants.EmojiError, resolveErr))
+	}
+
+	deleted, err := h.UserDeleteMessage(userID, target.ID)
+	if err != nil {
+		return errorResponse(fmt.Sprintf("%s Could not delete message: %v", constants.EmojiError, err))
+	}
+	loc, locErr := time.LoadLocation(deleted.Timezone)
+	if locErr != nil {
+		loc = time.UTC
+	}
+	channelLink := h.channel.MakeChannelLink(h.channel.GetInfoOrUnknown(deleted.ChannelID))
+	return &model.CommandResponse{
+		ResponseType: model.CommandResponseTypeEphemeral,
+		Text:         formatter.FormatDeleteSuccess(deleted.PostAt.In(loc), channelLink),
+	}
+}
+
+// listNumber reads ref as a `/schedule list` number. Digit strings as long as a short id
+// are treated as ids, since a uuid prefix can be all digits.
+func listNumber(ref string) (int, bool) {
+	if len(ref) >= constants.ShortIDLength || strings.Trim(ref, "0123456789") != "" {
+		return 0, false
+	}
+	number, err := strconv.Atoi(ref)
+	return number, err == nil
+}
+
+func resolveDeleteTarget(msgs []*types.ScheduledMessage, ref string, number int, isNumber bool) (*types.ScheduledMessage, string) {
+	listCmd := fmt.Sprintf("/%s %s", constants.CommandTrigger, constants.SubcommandList)
+	if isNumber {
+		if number < 1 || number > len(msgs) {
+			return nil, fmt.Sprintf("No scheduled message #%d. Run `%s` to see the numbers.", number, listCmd)
+		}
+		return msgs[number-1], ""
+	}
+	var matches []*types.ScheduledMessage
+	for _, m := range msgs {
+		if strings.HasPrefix(m.ID, ref) {
+			matches = append(matches, m)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return nil, fmt.Sprintf("No scheduled message matches id `%s`. Run `%s` to see the ids.", ref, listCmd)
+	case 1:
+		return matches[0], ""
+	default:
+		return nil, fmt.Sprintf("Id `%s` matches %d scheduled messages. Use more of the id or the list number.", ref, len(matches))
+	}
 }

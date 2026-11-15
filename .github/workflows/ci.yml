@@ -21,6 +21,7 @@ jobs:
           cache-dependency-path: |
             translator/go.sum
             move-to-thread/go.sum
+            scheduled-messages/go.sum
       - name: Install release tools
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ripgrep
       - name: Build and verify

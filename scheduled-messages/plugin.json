@@ -5,19 +5,26 @@
     "homepage_url": "https://github.com/apartmentlines/mattermost-plugin-poor-mans-scheduled-messages",
     "support_url": "https://github.com/apartmentlines/mattermost-plugin-poor-mans-scheduled-messages/issues",
     "icon_path": "assets/poor-mans-scheduled-messages-icon.svg",
+    "version": "1.3.1-ryude.1",
     "min_server_version": "6.2.1",
     "server": {
         "executables": {
             "linux-amd64": "server/dist/plugin-linux-amd64",
-            "linux-arm64": "server/dist/plugin-linux-arm64",
-            "darwin-amd64": "server/dist/plugin-darwin-amd64",
-            "darwin-arm64": "server/dist/plugin-darwin-arm64",
-            "windows-amd64": "server/dist/plugin-windows-amd64.exe"
+            "linux-arm64": "server/dist/plugin-linux-arm64"
         }
     },
     "settings_schema": {
         "header": "",
         "footer": "",
-        "settings": []
+        "settings": [
+            {
+                "key": "DefaultTimezone",
+                "display_name": "Default timezone",
+                "type": "text",
+                "help_text": "IANA timezone (for example Asia/Seoul) used for users who have no timezone set in their profile, such as bot accounts. Empty means Asia/Seoul. An invalid name falls back to UTC.",
+                "placeholder": "Asia/Seoul",
+                "default": "Asia/Seoul"
+            }
+        ]
     }
 }

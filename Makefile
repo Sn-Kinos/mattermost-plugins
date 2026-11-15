@@ -1,4 +1,4 @@
-PLUGINS := translator shift-actions move-to-thread
+PLUGINS := translator shift-actions move-to-thread scheduled-messages
 
 .PHONY: test dist verify
 

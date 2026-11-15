@@ -3,6 +3,9 @@ package main
 import (
 	"fmt"
 	"reflect"
+	"strings"
+
+	"github.com/apartmentlines/mattermost-plugin-poor-mans-scheduled-messages/server/constants"
 )
 
 // configuration captures the plugin's external configuration as exposed in the Mattermost server
@@ -17,6 +20,20 @@ import (
 // If you add non-reference types to your configuration struct, be sure to rewrite Clone as a deep
 // copy appropriate for your types.
 type configuration struct {
+	DefaultTimezone string
+}
+
+// defaultTimezone is the timezone for users who have none set. An empty setting, which is
+// what an upgraded install has until an admin saves the settings page, means Asia/Seoul.
+func (c *configuration) defaultTimezone() string {
+	if tz := strings.TrimSpace(c.DefaultTimezone); tz != "" {
+		return tz
+	}
+	return constants.DefaultConfiguredTimezone
+}
+
+func (p *Plugin) defaultTimezone() string {
+	return p.getConfiguration().defaultTimezone()
 }
 
 // Clone shallow copies the configuration. Your implementation may require a deep copy if
@@ -29,8 +46,6 @@ func (c *configuration) Clone() *configuration {
 // getConfiguration retrieves the active configuration under lock, making it safe to use
 // concurrently. The active configuration may change underneath the client of this method, but
 // the struct returned by this API call is considered immutable.
-//
-//nolint:unused
 func (p *Plugin) getConfiguration() *configuration {
 	p.configurationLock.RLock()
 	defer p.configurationLock.RUnlock()

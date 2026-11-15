@@ -39,6 +39,24 @@ func FormatListAttachmentHeader(postAt time.Time, channelLink, messageContent st
 	return fmt.Sprintf("##### %s\n%s\n\n%s", postAt.Format(constants.TimeLayout), formatDestination(channelLink, inThread), messageContent)
 }
 
+// FormatListItemTitle renders the number and short id that `/schedule delete` accepts.
+func FormatListItemTitle(number int, msgID string) string {
+	return fmt.Sprintf("#%d · %s", number, ShortID(msgID))
+}
+
+// ShortID returns the leading characters of a message id shown in the list.
+func ShortID(msgID string) string {
+	if len(msgID) <= constants.ShortIDLength {
+		return msgID
+	}
+	return msgID[:constants.ShortIDLength]
+}
+
+// FormatDeleteSuccess renders the confirmation for a deleted scheduled message.
+func FormatDeleteSuccess(postAt time.Time, channelLink string) string {
+	return fmt.Sprintf("%s Message scheduled for **%s** %s has been deleted.", constants.EmojiSuccess, postAt.Format(constants.TimeLayout), channelLink)
+}
+
 func formatDestination(channelLink string, inThread bool) string {
 	if inThread {
 		return channelLink + " (thread)"

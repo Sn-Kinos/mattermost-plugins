@@ -20,6 +20,7 @@ type ScheduleService struct {
 	channel         ports.ChannelService
 	clock           ports.Clock
 	maxUserMessages int
+	defaultTimezone func() string
 }
 
 // NewScheduleService constructs a ScheduleService.
@@ -30,6 +31,7 @@ func NewScheduleService(
 	channel ports.ChannelService,
 	clk ports.Clock,
 	maxUserMessages int,
+	defaultTimezone func() string,
 ) *ScheduleService {
 	logger.Debug("Creating new ScheduleService")
 	return &ScheduleService{
@@ -39,6 +41,7 @@ func NewScheduleService(
 		channel:         channel,
 		clock:           clk,
 		maxUserMessages: maxUserMessages,
+		defaultTimezone: defaultTimezone,
 	}
 }
 
@@ -109,13 +112,14 @@ func (s *ScheduleService) checkMaxMessageBytes(text string) error {
 
 func (s *ScheduleService) getUserTimezone(userID string) string {
 	s.logger.Debug("Attempting to get user timezone", "user_id", userID)
+	defaultTZ := s.defaultTimezone()
 	user, err := s.userAPI.Get(userID)
 	if err != nil {
-		s.logger.Warn("Failed to get user object, falling back to default timezone", "user_id", userID, "error", err, "default_timezone", constants.DefaultTimezone)
-		return constants.DefaultTimezone
+		s.logger.Warn("Failed to get user object, falling back to default timezone", "user_id", userID, "error", err, "default_timezone", defaultTZ)
+		return defaultTZ
 	}
 
-	tz := constants.DefaultTimezone
+	tz := defaultTZ
 	source := "default"
 
 	automaticTimezone, aok := user.Timezone["automaticTimezone"]

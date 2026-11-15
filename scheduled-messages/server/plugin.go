@@ -202,7 +202,7 @@ func (p *Plugin) initialize(botID string, clk ports.Clock, builder AppBuilder) e
 	listService := command.NewListService(p.logger, p.Store, p.Channel)
 
 	p.logger.Debug("Initializing Schedule service", "max_user_messages", p.defaultMaxUserMessages)
-	scheduleService := command.NewScheduleService(p.logger, &p.client.User, p.Store, p.Channel, clk, p.defaultMaxUserMessages)
+	scheduleService := command.NewScheduleService(p.logger, &p.client.User, p.Store, p.Channel, clk, p.defaultMaxUserMessages, p.defaultTimezone)
 
 	p.logger.Debug("Initializing Command handler")
 	p.Command = builder.NewCommandHandler(

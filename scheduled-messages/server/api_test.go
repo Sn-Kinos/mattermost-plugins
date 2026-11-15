@@ -30,9 +30,9 @@ type mockCommand struct {
 	BuildEphemeralListFunc func(args *model.CommandArgs) *model.CommandResponse
 }
 
-func (m *mockCommand) Register() error { panic("not implemented") } // Not needed by api.go
+func (m *mockCommand) Register() error { panic("unused by api.go") } // Not needed by api.go
 func (m *mockCommand) Execute(*model.CommandArgs) (*model.CommandResponse, *model.AppError) {
-	panic("not implemented") // Not needed by api.go
+	panic("unused by api.go") // Not needed by api.go
 }
 func (m *mockCommand) UserDeleteMessage(userID, msgID string) (*types.ScheduledMessage, error) {
 	if m.UserDeleteMessageFunc != nil {
