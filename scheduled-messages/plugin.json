@@ -1,0 +1,23 @@
+{
+    "id": "com.mattermost.plugin-poor-mans-scheduled-messages",
+    "name": "Plugin Poor Man's Scheduled Messages",
+    "description": "Plugin to send scheduled messages.",
+    "homepage_url": "https://github.com/apartmentlines/mattermost-plugin-poor-mans-scheduled-messages",
+    "support_url": "https://github.com/apartmentlines/mattermost-plugin-poor-mans-scheduled-messages/issues",
+    "icon_path": "assets/poor-mans-scheduled-messages-icon.svg",
+    "min_server_version": "6.2.1",
+    "server": {
+        "executables": {
+            "linux-amd64": "server/dist/plugin-linux-amd64",
+            "linux-arm64": "server/dist/plugin-linux-arm64",
+            "darwin-amd64": "server/dist/plugin-darwin-amd64",
+            "darwin-arm64": "server/dist/plugin-darwin-arm64",
+            "windows-amd64": "server/dist/plugin-windows-amd64.exe"
+        }
+    },
+    "settings_schema": {
+        "header": "",
+        "footer": "",
+        "settings": []
+    }
+}
