@@ -4,14 +4,19 @@ const fs = require('node:fs');
 const {JSDOM} = require('jsdom');
 
 const posts = {
-    p1: {id: 'p1', channel_id: 'c1', user_id: 'me', message: 'first'},
-    p2: {id: 'p2', channel_id: 'c1', user_id: 'alex', message: 'second'},
-    p3: {id: 'p3', channel_id: 'c1', user_id: 'alex', message: 'topic'},
-    joined: {id: 'joined', channel_id: 'c1', user_id: 'alex', type: 'system_join_channel'},
-    far: {id: 'far', channel_id: 'c2', user_id: 'me', message: 'elsewhere'},
+    p1: {id: 'p1', channel_id: 'c1', user_id: 'me', message: 'first', create_at: 100},
+    p2: {id: 'p2', channel_id: 'c1', user_id: 'alex', message: 'second', create_at: 200},
+    p3: {id: 'p3', channel_id: 'c1', user_id: 'alex', message: 'topic', create_at: 50},
+    joined: {id: 'joined', channel_id: 'c1', user_id: 'alex', type: 'system_join_channel', create_at: 150},
+    far: {id: 'far', channel_id: 'c2', user_id: 'me', message: 'elsewhere', create_at: 300},
 };
 
-function load({respond = () => ({ok: true, body: {root_id: 'p3'}}), crt = 'on'} = {}) {
+const loadedChannels = {
+    c1: [{order: ['p2', 'joined', 'p1', 'p3'], recent: true}],
+    c2: [{order: ['far'], recent: true}],
+};
+
+function load({respond = () => ({ok: true, body: {root_id: 'p3'}}), crt = 'on', postsInChannel = loadedChannels} = {}) {
     const dom = new JSDOM(`<div id="root"></div><div id="bar"></div>
         ${Object.keys(posts).map(id => `<div id="post_${id}"><p class="text">${id}</p><a href="#">link</a></div>`).join('')}`,
     {runScripts: 'outside-only', url: 'https://chat.example/team-a/channels/town'});
@@ -22,7 +27,7 @@ function load({respond = () => ({ok: true, body: {root_id: 'p3'}}), crt = 'on'} 
     window.React = require('react');
     window.document.cookie = 'MMCSRF=token123';
     const state = {entities: {
-        posts: {posts},
+        posts: {posts, postsInChannel},
         channels: {currentChannelId: 'c1'},
         teams: {currentTeamId: 't1'},
         threads: {threads: {p3: {id: 'p3', reply_count: 0, is_following: true}, s1: {id: 's1', reply_count: 2, is_following: true}}},
@@ -33,8 +38,8 @@ function load({respond = () => ({ok: true, body: {root_id: 'p3'}}), crt = 'on'} 
     const dispatched = [];
     const requests = [];
     window.fetch = async (url, options) => {
-        requests.push({url, headers: options.headers, body: options.body && JSON.parse(options.body)});
-        const {ok, body} = respond(url);
+        requests.push({url, method: options.method || 'GET', headers: options.headers, body: options.body && JSON.parse(options.body)});
+        const {ok, body} = respond(url, options);
         return {ok, json: async () => body};
     };
     let PostAction;
@@ -63,6 +68,7 @@ function load({respond = () => ({ok: true, body: {root_id: 'p3'}}), crt = 'on'} 
     const buttons = () => [...window.document.querySelectorAll('#root button')].map(b => b.getAttribute('aria-label'));
     const press = label => act(() => window.document.querySelector(`button[aria-label="${label}"]`).click());
     const barText = () => window.document.getElementById('bar').textContent;
+    const barButtons = () => [...window.document.querySelectorAll('#bar button')].map(b => b.textContent);
     const barButton = label => act(async () => {
         [...window.document.querySelectorAll('#bar button')].find(b => b.textContent === label).click();
         await new Promise(resolve => setTimeout(resolve, 0));
@@ -80,11 +86,11 @@ function load({respond = () => ({ok: true, body: {root_id: 'p3'}}), crt = 'on'} 
         state.entities.channels.currentChannelId = id;
         subscribers.forEach(listener => listener());
     });
-    const socket = (event, data) => act(async () => {
-        sockets[event]({event, data, broadcast: {channel_id: 'c1'}});
+    const socket = (event, data, channel = 'c1') => act(async () => {
+        sockets[`custom_io.github.sn-kinos.move-to-thread_${event}`]({event, data, broadcast: {channel_id: channel}});
         await new Promise(resolve => setTimeout(resolve, 0));
     });
-    return {hover, buttons, press, barText, barButton, clickPost, postClicks, highlighted, switchChannel, requests, dispatched, plugin, socket};
+    return {hover, buttons, press, barText, barButtons, barButton, clickPost, postClicks, highlighted, switchChannel, requests, dispatched, plugin, socket};
 }
 
 test('select a message from its toolbar, add more by clicking, then move them under a target', async () => {
@@ -111,6 +117,7 @@ test('select a message from its toolbar, add more by clicking, then move them un
     await t.barButton('옮기기');
     assert.deepEqual(JSON.parse(JSON.stringify(t.requests)), [{
         url: '/plugins/io.github.sn-kinos.move-to-thread/move',
+        method: 'POST',
         headers: {'Content-Type': 'application/json', 'X-CSRF-Token': 'token123', 'X-Requested-With': 'XMLHttpRequest'},
         body: {target_id: 'p3', post_ids: ['p1', 'p2']},
     }]);
@@ -143,19 +150,74 @@ test('system messages get no buttons and clicks on them do not select', async ()
     assert.match(t.barText(), /^1개 선택됨/);
 });
 
-test('selecting in another channel starts over, and switching channels clears the selection', async () => {
+test('the selection survives a channel switch; there clicks act as usual and the checkbox starts over', async () => {
     const t = load();
     await t.hover('p1');
     await t.press('답글로 옮길 메시지로 선택');
+    await t.switchChannel('c2');
+    assert.match(t.barText(), /^1개 선택됨/);
+    assert.match(t.highlighted(), /#post_p1/);
+
+    await t.clickPost('far');
+    assert.match(t.barText(), /^1개 선택됨/);
+    assert.deepEqual(t.postClicks, ['far'], 'the click reaches Mattermost');
+
     await t.hover('far');
-    assert.deepEqual(t.buttons(), ['답글로 옮길 메시지로 선택']);
+    assert.deepEqual(t.buttons(), ['답글로 옮길 메시지로 선택', '선택한 메시지를 여기 답글로 넣기']);
     await t.press('답글로 옮길 메시지로 선택');
     assert.match(t.barText(), /^1개 선택됨/);
     assert.match(t.highlighted(), /#post_far/);
     assert.doesNotMatch(t.highlighted(), /#post_p1/);
+    assert.deepEqual(t.barButtons(), ['취소'], 'the selection is in this channel now');
+});
 
-    await t.switchChannel('c3');
+test('in another channel the bar moves the selection there', async () => {
+    const t = load({respond: () => ({ok: true, body: {channel_id: 'c2'}})});
+    await t.hover('p1');
+    await t.press('답글로 옮길 메시지로 선택');
+    assert.deepEqual(t.barButtons(), ['취소']);
+
+    await t.switchChannel('c2');
+    assert.deepEqual(t.barButtons(), ['이 채널로 옮기기', '취소']);
+    await t.barButton('이 채널로 옮기기');
+    assert.equal(t.barText(), '선택한 메시지 1개를 이 채널로 옮길까요?옮기기돌아가기');
+
+    await t.barButton('옮기기');
+    assert.deepEqual(JSON.parse(JSON.stringify(t.requests)), [{
+        url: '/plugins/io.github.sn-kinos.move-to-thread/move',
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': 'token123', 'X-Requested-With': 'XMLHttpRequest'},
+        body: {channel_id: 'c2', post_ids: ['p1']},
+    }]);
     assert.equal(t.barText(), '');
+    assert.deepEqual(t.dispatched, [], 'the mover is already looking at the channel');
+});
+
+test('leaving the channel while confirming a channel move goes back to the selection', async () => {
+    const t = load();
+    await t.hover('p1');
+    await t.press('답글로 옮길 메시지로 선택');
+    await t.switchChannel('c2');
+    await t.barButton('이 채널로 옮기기');
+    await t.switchChannel('c3');
+    assert.match(t.barText(), /^1개 선택됨/);
+    assert.deepEqual(t.barButtons(), ['이 채널로 옮기기', '취소']);
+});
+
+test('the + button on a message in another channel moves the selection into its thread', async () => {
+    const t = load({respond: () => ({ok: true, body: {root_id: 'far'}})});
+    await t.hover('p1');
+    await t.press('답글로 옮길 메시지로 선택');
+    await t.switchChannel('c2');
+    await t.hover('far');
+    await t.press('선택한 메시지를 여기 답글로 넣기');
+    assert.equal(t.barText(), '선택한 메시지 1개를 이 메시지의 답글로 옮길까요?옮기기돌아가기');
+
+    await t.barButton('옮기기');
+    assert.deepEqual(t.requests.map(r => r.body), [{target_id: 'far', post_ids: ['p1']}]);
+    assert.equal(t.dispatched[0].type, 'SELECT_POST');
+    assert.equal(t.dispatched[0].postId, 'far');
+    assert.equal(t.dispatched[0].channelId, 'c2');
 });
 
 test('unselecting the last message or pressing cancel ends selection', async () => {
@@ -176,8 +238,8 @@ const movedThread = {
     order: ['p2', 'p1', 'p3'],
     posts: {
         p3: {...posts.p3, reply_count: 2},
-        p1: {...posts.p1, root_id: 'p3'},
-        p2: {...posts.p2, root_id: 'p3'},
+        p1: {...posts.p1, root_id: 'p3', create_at: 51},
+        p2: {...posts.p2, root_id: 'p3', create_at: 52},
     },
 };
 
@@ -188,7 +250,7 @@ const byUrl = url => ({ok: true, body: url.endsWith('/thread') ? movedThread : s
 
 test('a move announced by the server puts the posts in their new thread without a reload', async () => {
     const t = load({respond: byUrl});
-    await t.socket('custom_io.github.sn-kinos.move-to-thread_moved', {root_id: 'p3', post_ids: ['p1', 'p2'], source_roots: ['s1']});
+    await t.socket('moved', {root_id: 'p3', channel_id: 'c1', post_ids: ['p1', 'p2'], source_roots: ['s1']});
 
     assert.deepEqual(t.requests.map(r => r.url), ['/api/v4/posts/p3/thread', '/api/v4/posts/s1']);
     assert.deepEqual(types(t.dispatched), ['POST_REMOVED', 'POST_REMOVED', 'RECEIVED_POSTS', 'RECEIVED_POSTS_IN_THREAD',
@@ -204,19 +266,92 @@ test('a move announced by the server puts the posts in their new thread without 
 
 test('with threads not collapsed, the moved replies also take their place in the channel by time', async () => {
     const t = load({respond: byUrl, crt: 'off'});
-    await t.socket('custom_io.github.sn-kinos.move-to-thread_moved', {root_id: 'p3', post_ids: ['p1', 'p2'], source_roots: []});
+    await t.socket('moved', {root_id: 'p3', channel_id: 'c1', post_ids: ['p1', 'p2'], source_roots: []});
 
     assert.deepEqual(types(t.dispatched), ['POST_REMOVED', 'POST_REMOVED', 'RECEIVED_POSTS', 'RECEIVED_POSTS_IN_THREAD',
         'RECEIVED_THREAD', 'RECEIVED_POSTS_SINCE']);
     const since = t.dispatched[5];
     assert.equal(since.channelId, 'c1');
-    assert.deepEqual(since.data.order, ['p1', 'p2']);
-    assert.deepEqual(Object.keys(since.data.posts), ['p1', 'p2']);
+    assert.deepEqual(since.data.order, ['p2', 'p1']);
+    assert.deepEqual(Object.keys(since.data.posts), ['p2', 'p1']);
 });
 
 test('a move in a channel this screen never loaded is ignored', async () => {
     const t = load({respond: () => ({ok: true, body: movedThread})});
-    await t.socket('custom_io.github.sn-kinos.move-to-thread_moved', {root_id: 'unknown', post_ids: ['nope'], source_roots: []});
+    await t.socket('moved', {root_id: 'unknown', channel_id: 'c9', post_ids: ['nope'], source_roots: []}, 'c9');
+    await t.socket('moved', {root_id: '', channel_id: 'c9', post_ids: ['nope'], source_roots: []}, 'c9');
     assert.deepEqual(t.requests, []);
     assert.deepEqual(t.dispatched, []);
+});
+
+test('posts the screen can no longer read still leave where they were', async () => {
+    const t = load({respond: () => ({ok: false, body: {}})});
+    await t.socket('moved', {root_id: 'hidden', channel_id: 'c9', post_ids: ['p1', 'p2'], source_roots: []}, 'c9');
+    assert.deepEqual(t.requests.map(r => r.url), ['/api/v4/posts/hidden/thread']);
+    assert.deepEqual(t.dispatched.map(a => [a.type, a.data.id]), [['POST_REMOVED', 'p1'], ['POST_REMOVED', 'p2']]);
+});
+
+test('the channel posts left hears only what left and updates the reply counts', async () => {
+    const t = load({respond: () => ({ok: true, body: source})});
+    await t.socket('moved_out', {post_ids: ['p1', 'p2', 'gone'], source_roots: ['s1']});
+
+    assert.deepEqual(t.requests.map(r => r.url), ['/api/v4/posts/s1']);
+    assert.deepEqual(t.dispatched.map(a => [a.type, a.data.id || a.data.thread.id]),
+        [['POST_REMOVED', 'p1'], ['POST_REMOVED', 'p2'], ['RECEIVED_POST', 's1'], ['RECEIVED_THREAD', 's1']]);
+    assert.equal(t.dispatched[3].data.thread.reply_count, 1);
+});
+
+// p1 moved to c2 as a root with its reply p2, keeping their times.
+const arrivedAt = (root, reply) => (url, options) => ({
+    ok: true,
+    body: url === '/api/v4/posts/ids' && options.method === 'POST' ? [
+        {...posts.p1, channel_id: 'c2', create_at: root},
+        {...posts.p2, channel_id: 'c2', root_id: 'p1', create_at: reply},
+    ] : {},
+});
+const byIds = arrivedAt(400, 500);
+const plain = value => JSON.parse(JSON.stringify(value));
+
+test('posts moved into a channel take their place there by time', async () => {
+    for (const [crt, order] of [['on', ['p1']], ['off', ['p2', 'p1']]]) {
+        const t = load({respond: byIds, crt});
+        await t.socket('moved', {root_id: '', channel_id: 'c2', post_ids: ['p1', 'p2'], source_roots: ['s1']}, 'c2');
+
+        assert.deepEqual(JSON.parse(JSON.stringify(t.requests)), [{
+            url: '/api/v4/posts/ids',
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRF-Token': 'token123', 'X-Requested-With': 'XMLHttpRequest'},
+            body: ['p1', 'p2'],
+        }]);
+        assert.deepEqual(types(t.dispatched), ['POST_REMOVED', 'POST_REMOVED', 'RECEIVED_POSTS', 'RECEIVED_POSTS_SINCE']);
+        assert.equal(t.dispatched[2].channelId, 'c2');
+        assert.deepEqual(t.dispatched[2].data.posts.p2.root_id, 'p1');
+        const since = t.dispatched[3];
+        assert.equal(since.channelId, 'c2');
+        assert.deepEqual(since.data.order, order, `collapsed threads ${crt}: only roots join the channel list`);
+        assert.deepEqual(Object.keys(since.data.posts), order);
+    }
+});
+
+test('a channel loaded back to its first post takes even posts older than it', async () => {
+    const t = load({respond: arrivedAt(10, 20), postsInChannel: {c2: [{order: ['far'], recent: true, oldest: true}]}});
+    await t.socket('moved', {root_id: '', channel_id: 'c2', post_ids: ['p1', 'p2'], source_roots: []}, 'c2');
+
+    assert.deepEqual(types(t.dispatched), ['POST_REMOVED', 'POST_REMOVED', 'RECEIVED_POSTS', 'RECEIVED_POSTS_IN_CHANNEL']);
+    const block = t.dispatched[3];
+    assert.equal(block.channelId, 'c2');
+    assert.deepEqual(plain(block.data.order), ['far', 'p1']);
+    assert.equal(block.recent, true);
+    assert.equal(block.oldest, true);
+});
+
+test('posts moved into an empty channel this screen has open appear there', async () => {
+    const t = load({respond: byIds, postsInChannel: {c2: [{order: [], recent: true}]}});
+    await t.socket('moved', {root_id: '', channel_id: 'c2', post_ids: ['p1', 'p2'], source_roots: []}, 'c2');
+
+    const block = t.dispatched[3];
+    assert.equal(block.type, 'RECEIVED_POSTS_IN_CHANNEL');
+    assert.deepEqual(plain(block.data.order), ['p1']);
+    assert.equal(block.recent, true);
+    assert.equal(block.oldest, false);
 });

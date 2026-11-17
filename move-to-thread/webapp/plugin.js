@@ -4,8 +4,9 @@
     const React = window.React;
     const h = React.createElement;
 
-    // One selection at a time, always inside one channel.
-    let selection = {channelId: '', ids: [], targetId: '', busy: false, error: ''};
+    // One selection at a time, always inside one channel. target, once
+    // picked, is {kind: 'thread', postId, channelId} or {kind: 'channel', channelId}.
+    let selection = {channelId: '', ids: [], target: null, busy: false, error: ''};
     const listeners = new Set();
     const set = changes => {
         selection = {...selection, ...changes};
@@ -13,7 +14,7 @@
             (selection.ids.length ? ' {background: rgba(var(--button-bg-rgb), 0.12); box-shadow: inset 3px 0 0 var(--button-bg);}' : '');
         listeners.forEach(listener => listener());
     };
-    const clear = () => set({channelId: '', ids: [], targetId: '', busy: false, error: ''});
+    const clear = () => set({channelId: '', ids: [], target: null, busy: false, error: ''});
     const subscribe = listener => {
         listeners.add(listener);
         return () => listeners.delete(listener);
@@ -28,16 +29,17 @@
 
     const toggle = post => {
         if (selection.channelId !== post.channel_id) {
-            set({channelId: post.channel_id, ids: [post.id], targetId: '', error: ''});
+            set({channelId: post.channel_id, ids: [post.id], target: null, error: ''});
             return;
         }
         const ids = selection.ids.includes(post.id) ?
             selection.ids.filter(id => id !== post.id) : [...selection.ids, post.id];
-        if (ids.length) set({ids, targetId: '', error: ''});
+        if (ids.length) set({ids, target: null, error: ''});
         else clear();
     };
 
-    // While a selection exists, a plain click on a message adds or removes it.
+    // While a selection exists, a plain click on a message of its channel adds
+    // or removes it.
     const clickToToggle = store => event => {
         if (!selection.ids.length || selection.busy || event.button !== 0 ||
             event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
@@ -45,26 +47,35 @@
         if (!element || event.target.closest('a, button, input, textarea, video, img, [role="button"], [role="menuitem"], .post-menu')) return;
         if (window.getSelection?.().toString()) return;
         const post = store.getState().entities.posts.posts[element.id.slice(element.id.indexOf('_') + 1)];
-        if (!movable(post)) return;
+        if (!movable(post) || post.channel_id !== selection.channelId) return;
         // Otherwise Mattermost's own click handler opens the thread on the right.
         event.stopPropagation();
         toggle(post);
     };
 
+    const apiPost = (url, body) => fetch(url, {
+        method: 'POST', credentials: 'same-origin',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]+)/)?.[1] || '',
+            'X-Requested-With': 'XMLHttpRequest',
+        },
+        body: JSON.stringify(body),
+    });
+    const apiGet = url => fetch(url, {credentials: 'same-origin', headers: {'X-Requested-With': 'XMLHttpRequest'}});
+
     const move = async store => {
+        const {target, ids} = selection;
         set({busy: true, error: ''});
-        const csrf = document.cookie.match(/(?:^|;\s*)MMCSRF=([^;]+)/)?.[1] || '';
         try {
-            const response = await fetch(`/plugins/${pluginId}/move`, {
-                method: 'POST', credentials: 'same-origin',
-                headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrf, 'X-Requested-With': 'XMLHttpRequest'},
-                body: JSON.stringify({target_id: selection.targetId, post_ids: selection.ids}),
-            });
+            const destination = target.kind === 'thread' ? {target_id: target.postId} : {channel_id: target.channelId};
+            const response = await apiPost(`/plugins/${pluginId}/move`, {...destination, post_ids: ids});
             const body = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(body.error || '메시지를 옮기지 못했습니다. 잠시 후 다시 시도해 주세요.');
-            const channelId = selection.channelId;
             clear();
-            store.dispatch({type: 'SELECT_POST', postId: body.root_id, channelId, timestamp: Date.now()});
+            if (target.kind === 'thread') {
+                store.dispatch({type: 'SELECT_POST', postId: body.root_id, channelId: target.channelId, timestamp: Date.now()});
+            }
         } catch (error) {
             set({busy: false, error: error.message || '메시지를 옮기지 못했습니다. 잠시 후 다시 시도해 주세요.'});
         }
@@ -77,27 +88,19 @@
                 (setting === 'default_on' ? 'on' : 'off')) === 'on');
     };
 
-    // The server moved posts in place without telling Mattermost's own client,
-    // so take them out of where this screen has them and load their new thread.
-    const refresh = store => async ({data, broadcast}) => {
-        const state = store.getState();
-        const known = data.post_ids.map(id => state.entities.posts.posts[id]).filter(Boolean);
-        if (!known.length && !state.entities.posts.posts[data.root_id]) return;
-        const response = await fetch(`/api/v4/posts/${data.root_id}/thread`, {
-            credentials: 'same-origin', headers: {'X-Requested-With': 'XMLHttpRequest'},
-        });
-        if (!response.ok) return;
-        const thread = await response.json();
+    const removeKnown = (store, ids) => {
+        const known = ids.map(id => store.getState().entities.posts.posts[id]).filter(Boolean);
         known.forEach(post => store.dispatch({type: 'POST_REMOVED', data: post}));
-        store.dispatch({type: 'RECEIVED_POSTS', data: thread, channelId: broadcast.channel_id});
-        store.dispatch({type: 'RECEIVED_POSTS_IN_THREAD', data: thread, rootId: data.root_id});
+    };
 
-        // Reply counts of the threads that gained or lost replies. Followed
-        // threads draw their count from their own record, not the post.
+    // Reply counts of the threads that gained or lost replies. Followed
+    // threads draw their count from their own record, not the post.
+    const refreshCounts = async (store, roots, sourceIds) => {
+        const state = store.getState();
         const crt = collapsedThreads(state);
-        const roots = [thread.posts[data.root_id]];
-        for (const id of data.source_roots || []) {
-            const source = await fetch(`/api/v4/posts/${id}`, {credentials: 'same-origin', headers: {'X-Requested-With': 'XMLHttpRequest'}});
+        roots = [...roots];
+        for (const id of sourceIds || []) {
+            const source = await apiGet(`/api/v4/posts/${id}`);
             if (!source.ok) continue;
             const post = await source.json();
             store.dispatch({type: 'RECEIVED_POST', data: post, features: {crtEnabled: crt}});
@@ -110,13 +113,67 @@
                 data: {thread: {...followed[post.id], reply_count: post.reply_count}, team_id: state.entities.teams.currentTeamId},
             });
         }
-        if (crt) return;
-        const order = data.post_ids.filter(id => thread.posts[id]);
+    };
+
+    // Puts moved posts into the channel's list of recent posts by time. Under
+    // collapsed threads the list holds only roots.
+    const placeInChannel = (store, channelId, moved) => {
+        const state = store.getState();
+        const crt = collapsedThreads(state);
+        const listed = moved.filter(post => !crt || !post.root_id).sort((a, b) => b.create_at - a.create_at);
+        const recent = state.entities.posts.postsInChannel?.[channelId]?.find(block => block.recent);
+        if (!listed.length || !recent) return;
+        const posts = Object.fromEntries(listed.map(post => [post.id, post]));
+        if (recent.oldest || !recent.order.length) {
+            // RECEIVED_POSTS_SINCE would drop posts older than the oldest one
+            // shown, but here nothing older is left to load on scroll.
+            const all = {...state.entities.posts.posts, ...posts};
+            const order = [...new Set([...recent.order, ...listed.map(post => post.id)])].
+                sort((a, b) => all[b].create_at - all[a].create_at);
+            store.dispatch({type: 'RECEIVED_POSTS_IN_CHANNEL', channelId, data: {order, posts}, recent: true, oldest: Boolean(recent.oldest)});
+            return;
+        }
+        store.dispatch({type: 'RECEIVED_POSTS_SINCE', channelId, data: {order: listed.map(post => post.id), posts}});
+    };
+
+    // The server moved posts in place without telling Mattermost's own client,
+    // so take them out of where this screen has them and load their new place.
+    const movedIntoThread = async (store, data) => {
+        const state = store.getState();
+        const known = data.post_ids.filter(id => state.entities.posts.posts[id]);
+        if (!known.length && !state.entities.posts.posts[data.root_id]) return;
+        const response = await apiGet(`/api/v4/posts/${data.root_id}/thread`);
+        removeKnown(store, data.post_ids);
+        if (!response.ok) return;
+        const thread = await response.json();
+        store.dispatch({type: 'RECEIVED_POSTS', data: thread, channelId: data.channel_id});
+        store.dispatch({type: 'RECEIVED_POSTS_IN_THREAD', data: thread, rootId: data.root_id});
+        await refreshCounts(store, [thread.posts[data.root_id]], data.source_roots);
+        placeInChannel(store, data.channel_id, data.post_ids.map(id => thread.posts[id]).filter(Boolean));
+    };
+
+    const movedIntoChannel = async (store, data) => {
+        const state = store.getState();
+        const known = data.post_ids.filter(id => state.entities.posts.posts[id]);
+        if (!known.length && !state.entities.posts.postsInChannel?.[data.channel_id]) return;
+        removeKnown(store, data.post_ids);
+        const response = await apiPost('/api/v4/posts/ids', data.post_ids);
+        if (!response.ok) return;
+        const moved = await response.json();
         store.dispatch({
-            type: 'RECEIVED_POSTS_SINCE',
-            channelId: broadcast.channel_id,
-            data: {order, posts: Object.fromEntries(order.map(id => [id, thread.posts[id]]))},
+            type: 'RECEIVED_POSTS',
+            data: {order: moved.map(post => post.id), posts: Object.fromEntries(moved.map(post => [post.id, post]))},
+            channelId: data.channel_id,
         });
+        placeInChannel(store, data.channel_id, moved);
+    };
+
+    const moved = store => ({data}) => (data.root_id ? movedIntoThread(store, data) : movedIntoChannel(store, data));
+
+    // Sent to the channel the posts left, which may not see where they went.
+    const movedOut = store => async ({data}) => {
+        removeKnown(store, data.post_ids);
+        await refreshCounts(store, [], data.source_roots);
     };
 
     const button = (label, icon, onClick, active) => h('button', {
@@ -135,20 +192,23 @@
         const buttons = [selected ?
             button('선택 해제', 'icon-checkbox-marked', () => toggle(post), true) :
             button('답글로 옮길 메시지로 선택', 'icon-checkbox-blank-outline', () => toggle(post))];
-        if (current.ids.length && !selected && current.channelId === post.channel_id) {
+        if (current.ids.length && !selected) {
             buttons.push(button('선택한 메시지를 여기 답글로 넣기', 'icon-message-plus-outline',
-                () => set({targetId: post.id, error: ''})));
+                () => set({target: {kind: 'thread', postId: post.id, channelId: post.channel_id}, error: ''})));
         }
         return buttons;
     };
 
     const SelectionBar = ({store}) => {
         const current = useSelection();
+        const channelId = React.useSyncExternalStore(store.subscribe, () => store.getState().entities.channels.currentChannelId);
         if (!current.ids.length) return null;
         const count = current.ids.length;
-        const text = current.targetId ?
-            `선택한 메시지 ${count}개를 이 메시지의 답글로 옮길까요?` :
-            `${count}개 선택됨 · 다른 메시지를 눌러 더 고르고, 넣을 메시지에서 + 말풍선 버튼을 누르세요.`;
+        const away = channelId !== current.channelId;
+        let text = `${count}개 선택됨 · 다른 메시지를 눌러 더 고르고, 넣을 메시지에서 + 말풍선 버튼을 누르세요.`;
+        if (current.target?.kind === 'thread') text = `선택한 메시지 ${count}개를 이 메시지의 답글로 옮길까요?`;
+        else if (current.target) text = `선택한 메시지 ${count}개를 이 채널로 옮길까요?`;
+        else if (away) text = `${count}개 선택됨 · 넣을 메시지에서 + 말풍선 버튼을 누르거나 이 채널로 옮기세요.`;
         const action = (label, onClick, primary) => h('button', {
             type: 'button',
             className: 'btn btn-sm ' + (primary ? 'btn-primary' : 'btn-tertiary'),
@@ -168,15 +228,17 @@
             },
         },
         h('span', null, text, current.error && h('span', {style: {display: 'block', color: 'var(--error-text)'}}, current.error)),
-        current.targetId && action(current.busy ? '옮기는 중…' : '옮기기', () => move(store), true),
-        action(current.targetId ? '돌아가기' : '취소', () => (current.targetId ? set({targetId: '', error: ''}) : clear())));
+        current.target && action(current.busy ? '옮기는 중…' : '옮기기', () => move(store), true),
+        !current.target && away && action('이 채널로 옮기기', () => set({target: {kind: 'channel', channelId}, error: ''}), true),
+        action(current.target ? '돌아가기' : '취소', () => (current.target ? set({target: null, error: ''}) : clear())));
     };
 
     window.registerPlugin(pluginId, {
         initialize(registry, store) {
             registry.registerPostActionComponent(PostAction);
             registry.registerRootComponent(() => h(SelectionBar, {store}));
-            registry.registerWebSocketEventHandler(`custom_${pluginId}_moved`, refresh(store));
+            registry.registerWebSocketEventHandler(`custom_${pluginId}_moved`, moved(store));
+            registry.registerWebSocketEventHandler(`custom_${pluginId}_moved_out`, movedOut(store));
             const onClick = clickToToggle(store);
             document.addEventListener('click', onClick, true);
             let channelId = store.getState().entities.channels.currentChannelId;
@@ -184,7 +246,9 @@
                 const next = store.getState().entities.channels.currentChannelId;
                 if (next === channelId) return;
                 channelId = next;
-                if (selection.ids.length && selection.channelId !== next) clear();
+                // "이 채널" and "이 메시지" in a pending confirmation no longer
+                // name what is on screen.
+                if (selection.target && !selection.busy) set({target: null, error: ''});
             });
             this.uninitialize = () => {
                 document.removeEventListener('click', onClick, true);
