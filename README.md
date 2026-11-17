@@ -6,7 +6,7 @@ Mattermost 플러그인 모음입니다. 플러그인마다 폴더가 따로 있
 |---|---|---|
 | [translator](translator/README.md) | `io.github.sn-kinos.translator` | 한국어·영어 메시지 번역 (`/trans`, 지정한 사용자의 메시지 자동 번역) |
 | [shift-actions](shift-actions/README.md) | `io.github.sn-kinos.shift-actions` | Shift를 누르면 메시지 툴바를 더 보기 메뉴 항목으로 바꿈 |
-| [move-to-thread](move-to-thread/README.md) | `io.github.sn-kinos.move-to-thread` | 여러 메시지를 골라 다른 메시지의 답글로 한 번에 옮김 |
+| [move-to-thread](move-to-thread/README.md) | `io.github.sn-kinos.move-to-thread` | 여러 메시지를 골라 다른 메시지의 답글이나 다른 채널로 한 번에 옮김 |
 | [scheduled-messages](scheduled-messages/README.md) | `com.mattermost.plugin-poor-mans-scheduled-messages` | `/schedule`로 예약 메시지 보내기·지우기 (원본 v1.3.1 개조, Apache-2.0) |
 
 ```sh

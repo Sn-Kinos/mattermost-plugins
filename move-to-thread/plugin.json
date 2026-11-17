@@ -1,7 +1,7 @@
 {
   "id": "io.github.sn-kinos.move-to-thread",
   "name": "Move to Thread",
-  "description": "Select several messages and move them under another message as replies.",
+  "description": "Select several messages and move them under another message as replies, or to another channel.",
   "version": "0.1.0",
   "min_server_version": "11.11.0",
   "server": {
