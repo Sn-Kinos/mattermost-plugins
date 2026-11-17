@@ -115,8 +115,8 @@
         }
     };
 
-    // Puts moved posts into the channel's list of recent posts by time. Under
-    // collapsed threads the list holds only roots.
+    // Puts posts moved into a channel, with their original times, into its
+    // list of recent posts. Under collapsed threads the list holds only roots.
     const placeInChannel = (store, channelId, moved) => {
         const state = store.getState();
         const crt = collapsedThreads(state);
@@ -126,7 +126,8 @@
         const posts = Object.fromEntries(listed.map(post => [post.id, post]));
         if (recent.oldest || !recent.order.length) {
             // RECEIVED_POSTS_SINCE would drop posts older than the oldest one
-            // shown, but here nothing older is left to load on scroll.
+            // shown, but here nothing older is left to load on scroll. It also
+            // fails on an empty list.
             const all = {...state.entities.posts.posts, ...posts};
             const order = [...new Set([...recent.order, ...listed.map(post => post.id)])].
                 sort((a, b) => all[b].create_at - all[a].create_at);
@@ -149,7 +150,13 @@
         store.dispatch({type: 'RECEIVED_POSTS', data: thread, channelId: data.channel_id});
         store.dispatch({type: 'RECEIVED_POSTS_IN_THREAD', data: thread, rootId: data.root_id});
         await refreshCounts(store, [thread.posts[data.root_id]], data.source_roots);
-        placeInChannel(store, data.channel_id, data.post_ids.map(id => thread.posts[id]).filter(Boolean));
+        if (collapsedThreads(state)) return;
+        const order = data.post_ids.filter(id => thread.posts[id]);
+        store.dispatch({
+            type: 'RECEIVED_POSTS_SINCE',
+            channelId: data.channel_id,
+            data: {order, posts: Object.fromEntries(order.map(id => [id, thread.posts[id]]))},
+        });
     };
 
     const movedIntoChannel = async (store, data) => {
@@ -204,7 +211,8 @@
         const channelId = React.useSyncExternalStore(store.subscribe, () => store.getState().entities.channels.currentChannelId);
         if (!current.ids.length) return null;
         const count = current.ids.length;
-        const away = channelId !== current.channelId;
+        // Threads, drafts and similar screens have no current channel.
+        const away = Boolean(channelId) && channelId !== current.channelId;
         let text = `${count}개 선택됨 · 다른 메시지를 눌러 더 고르고, 넣을 메시지에서 + 말풍선 버튼을 누르세요.`;
         if (current.target?.kind === 'thread') text = `선택한 메시지 ${count}개를 이 메시지의 답글로 옮길까요?`;
         else if (current.target) text = `선택한 메시지 ${count}개를 이 채널로 옮길까요?`;

@@ -202,6 +202,8 @@ test('leaving the channel while confirming a channel move goes back to the selec
     await t.switchChannel('c3');
     assert.match(t.barText(), /^1개 선택됨/);
     assert.deepEqual(t.barButtons(), ['이 채널로 옮기기', '취소']);
+    await t.switchChannel('');
+    assert.deepEqual(t.barButtons(), ['취소'], 'screens without a channel, like Threads, offer no channel to move to');
 });
 
 test('the + button on a message in another channel moves the selection into its thread', async () => {
@@ -265,15 +267,15 @@ test('a move announced by the server puts the posts in their new thread without 
 });
 
 test('with threads not collapsed, the moved replies also take their place in the channel by time', async () => {
-    const t = load({respond: byUrl, crt: 'off'});
+    const t = load({respond: byUrl, crt: 'off', postsInChannel: {c1: [{order: ['p2', 'joined', 'p1', 'p3'], recent: true, oldest: true}]}});
     await t.socket('moved', {root_id: 'p3', channel_id: 'c1', post_ids: ['p1', 'p2'], source_roots: []});
 
     assert.deepEqual(types(t.dispatched), ['POST_REMOVED', 'POST_REMOVED', 'RECEIVED_POSTS', 'RECEIVED_POSTS_IN_THREAD',
         'RECEIVED_THREAD', 'RECEIVED_POSTS_SINCE']);
     const since = t.dispatched[5];
     assert.equal(since.channelId, 'c1');
-    assert.deepEqual(since.data.order, ['p2', 'p1']);
-    assert.deepEqual(Object.keys(since.data.posts), ['p2', 'p1']);
+    assert.deepEqual(since.data.order, ['p1', 'p2']);
+    assert.deepEqual(Object.keys(since.data.posts), ['p1', 'p2']);
 });
 
 test('a move in a channel this screen never loaded is ignored', async () => {
