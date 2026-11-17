@@ -102,13 +102,14 @@ func move(api API, db store, userID string, req request) (plan, error) {
 			return plan{}, reject(http.StatusBadRequest, "시스템 메시지에는 답글을 넣을 수 없습니다.")
 		}
 		toID = root.ChannelId
-	} else if toID == first.ChannelId {
-		return plan{}, reject(http.StatusBadRequest, "이미 이 채널에 있는 메시지입니다.")
 	}
 
 	from, to, err := channels(api, userID, first.ChannelId, toID)
 	if err != nil {
 		return plan{}, err
+	}
+	if root == nil && from.Id == to.Id {
+		return plan{}, reject(http.StatusBadRequest, "이미 이 채널에 있는 메시지입니다.")
 	}
 	rootID := ""
 	if root != nil {

@@ -123,18 +123,22 @@ func (s postgres) Relocate(p plan) (err error) {
 			append([]any{p.To, p.ToTeamID}, args...)...); err != nil {
 			return err
 		}
-		// Unsent and scheduled replies follow the thread.
-		for _, table := range []string{"Drafts", "ScheduledPosts"} {
-			if _, err = tx.Exec(`UPDATE `+table+` SET ChannelId = $1 WHERE ChannelId = $2 AND RootId IN `+in,
-				append([]any{p.To, p.From}, args...)...); err != nil {
-				return err
-			}
-		}
 		in, args = list(2, p.MovedRoots)
 		if _, err = tx.Exec(`DELETE FROM ThreadMemberships AS m WHERE m.PostId IN `+in+`
 			AND NOT EXISTS (SELECT 1 FROM ChannelMembers WHERE ChannelId = $1 AND UserId = m.UserId)`,
 			append([]any{p.To}, args...)...); err != nil {
 			return err
+		}
+	}
+
+	if roots := append(p.FormerRoots, p.MovedRoots...); p.From != p.To && len(roots) > 0 {
+		// Unsent and scheduled replies follow the thread.
+		in, args := list(3, roots)
+		for _, table := range []string{"Drafts", "ScheduledPosts"} {
+			if _, err = tx.Exec(`UPDATE `+table+` SET ChannelId = $1 WHERE ChannelId = $2 AND RootId IN `+in,
+				append([]any{p.To, p.From}, args...)...); err != nil {
+				return err
+			}
 		}
 	}
 

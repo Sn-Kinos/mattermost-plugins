@@ -407,6 +407,12 @@ func TestMoveRejectsWithoutChangingAnything(t *testing.T) {
 			ids:    []string{"call00000000000000000000aa"},
 			status: http.StatusBadRequest,
 		},
+		"a channel's own post by someone outside it, without saying it is there": {
+			setup:  func(api *fakeAPI) { api.members[channel] = false },
+			to:     channel,
+			ids:    []string{"aaaa00000000000000000000aa"},
+			status: http.StatusForbidden,
+		},
 		"a call into a thread in another channel": {
 			setup: func(api *fakeAPI) {
 				api.add("call00000000000000000000aa", me, channel, "", "", 250).Type = "custom_calls"
