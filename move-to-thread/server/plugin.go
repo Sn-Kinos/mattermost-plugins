@@ -14,6 +14,7 @@ import (
 type API interface {
 	GetPost(postID string) (*model.Post, *model.AppError)
 	GetPostThread(postID string) (*model.PostList, *model.AppError)
+	GetChannel(channelID string) (*model.Channel, *model.AppError)
 	GetChannelMember(channelID, userID string) (*model.ChannelMember, *model.AppError)
 	HasPermissionToChannel(userID, channelID string, permission *model.Permission) bool
 	PublishWebSocketEvent(event string, payload map[string]any, broadcast *model.WebsocketBroadcast)
@@ -41,8 +42,9 @@ func (p *Plugin) OnActivate() error {
 	return nil
 }
 
-// ServeHTTP serves POST /move with {"target_id", "post_ids"} and answers
-// {"root_id"} or a Korean error message.
+// ServeHTTP serves POST /move with {"post_ids"} and either {"target_id"} or
+// {"channel_id"}, and answers {"root_id"}, {"channel_id"} or a Korean error
+// message.
 func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost || r.URL.Path != "/move" {
 		http.NotFound(w, r)
@@ -53,16 +55,13 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	var request struct {
-		TargetID string   `json:"target_id"`
-		PostIDs  []string `json:"post_ids"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&request); err != nil {
+	var req request
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 
-	rootID, err := move(p.api, p.store, userID, request.TargetID, request.PostIDs)
+	moved, err := move(p.api, p.store, userID, req)
 	w.Header().Set("Content-Type", "application/json")
 	var failed *failure
 	if errors.As(err, &failed) {
@@ -70,5 +69,9 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": failed.message})
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]string{"root_id": rootID})
+	if moved.RootID != "" {
+		_ = json.NewEncoder(w).Encode(map[string]string{"root_id": moved.RootID})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]string{"channel_id": moved.To})
 }
