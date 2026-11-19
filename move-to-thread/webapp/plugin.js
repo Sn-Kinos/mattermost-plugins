@@ -6,7 +6,8 @@
 
     // One selection at a time, always inside one channel. target, once
     // picked, is {kind: 'thread', postId, channelId} or {kind: 'channel', channelId}.
-    let selection = {channelId: '', ids: [], target: null, busy: false, error: ''};
+    // anchor is the post last picked, where a shift-click range starts.
+    let selection = {channelId: '', ids: [], anchor: '', target: null, busy: false, error: ''};
     const listeners = new Set();
     const set = changes => {
         selection = {...selection, ...changes};
@@ -14,7 +15,7 @@
             (selection.ids.length ? ' {background: rgba(var(--button-bg-rgb), 0.12); box-shadow: inset 3px 0 0 var(--button-bg);}' : '');
         listeners.forEach(listener => listener());
     };
-    const clear = () => set({channelId: '', ids: [], target: null, busy: false, error: ''});
+    const clear = () => set({channelId: '', ids: [], anchor: '', target: null, busy: false, error: ''});
     const subscribe = listener => {
         listeners.add(listener);
         return () => listeners.delete(listener);
@@ -29,28 +30,71 @@
 
     const toggle = post => {
         if (selection.channelId !== post.channel_id) {
-            set({channelId: post.channel_id, ids: [post.id], target: null, error: ''});
+            set({channelId: post.channel_id, ids: [post.id], anchor: post.id, target: null, error: ''});
             return;
         }
         const ids = selection.ids.includes(post.id) ?
             selection.ids.filter(id => id !== post.id) : [...selection.ids, post.id];
-        if (ids.length) set({ids, target: null, error: ''});
+        if (ids.length) set({ids, anchor: post.id, target: null, error: ''});
         else clear();
     };
 
-    // While a selection exists, a plain click on a message of its channel adds
-    // or removes it.
-    const clickToToggle = store => event => {
+    // Post ids in the order the list holding element shows them: the thread
+    // on the right, or the loaded block of the channel in the center.
+    const listOrder = (state, element, post) => {
+        const {posts, postsInThread = {}, postsInChannel = {}} = state.entities.posts;
+        if (element.id.startsWith('rhsPost_')) {
+            const root = post.root_id || post.id;
+            return [...new Set([root, ...(postsInThread[root] || [])])].
+                sort((a, b) => (posts[a]?.create_at || 0) - (posts[b]?.create_at || 0));
+        }
+        return (postsInChannel[post.channel_id] || []).find(block => block.order.includes(post.id))?.order || [];
+    };
+
+    // Adds every movable post between the anchor and post, both included.
+    // Without the anchor in the same list it is a plain toggle.
+    const extend = (state, element, post) => {
+        const order = listOrder(state, element, post);
+        const from = order.indexOf(selection.anchor);
+        const to = order.indexOf(post.id);
+        if (from < 0 || to < 0) {
+            toggle(post);
+            return;
+        }
+        const {posts} = state.entities.posts;
+        const range = order.slice(Math.min(from, to), Math.max(from, to) + 1).
+            filter(id => movable(posts[id]) && posts[id].channel_id === selection.channelId);
+        set({ids: [...new Set([...selection.ids, ...range])], anchor: post.id, target: null, error: ''});
+    };
+
+    // The post a click on the page selects, while a selection exists.
+    const clickedPost = (store, event) => {
         if (!selection.ids.length || selection.busy || event.button !== 0 ||
-            event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
+            event.altKey || event.ctrlKey || event.metaKey) return null;
         const element = event.target.closest?.('[id^="post_"], [id^="rhsPost_"]');
-        if (!element || event.target.closest('a, button, input, textarea, video, img, [role="button"], [role="menuitem"], .post-menu')) return;
-        if (window.getSelection?.().toString()) return;
+        if (!element || event.target.closest('a, button, input, textarea, video, img, [role="button"], [role="menuitem"], .post-menu')) return null;
         const post = store.getState().entities.posts.posts[element.id.slice(element.id.indexOf('_') + 1)];
-        if (!movable(post) || post.channel_id !== selection.channelId) return;
+        return movable(post) && post.channel_id === selection.channelId ? {element, post} : null;
+    };
+
+    // While a selection exists, a plain click on a message of its channel adds
+    // or removes it, and a shift-click adds the range from the anchor.
+    const clickToToggle = store => event => {
+        const clicked = clickedPost(store, event);
+        if (!clicked || (!event.shiftKey && window.getSelection?.().toString())) return;
         // Otherwise Mattermost's own click handler opens the thread on the right.
         event.stopPropagation();
-        toggle(post);
+        if (event.shiftKey) {
+            window.getSelection?.().removeAllRanges();
+            extend(store.getState(), clicked.element, clicked.post);
+        } else {
+            toggle(clicked.post);
+        }
+    };
+
+    // Keeps a shift-click from stretching the page's text selection.
+    const noTextRange = store => event => {
+        if (event.shiftKey && clickedPost(store, event)) event.preventDefault();
     };
 
     const apiPost = (url, body) => fetch(url, {
@@ -262,7 +306,9 @@
             registry.registerWebSocketEventHandler(`custom_${pluginId}_moved`, moved(store));
             registry.registerWebSocketEventHandler(`custom_${pluginId}_moved_out`, movedOut(store));
             const onClick = clickToToggle(store);
+            const onMouseDown = noTextRange(store);
             document.addEventListener('click', onClick, true);
+            document.addEventListener('mousedown', onMouseDown, true);
             let channelId = store.getState().entities.channels.currentChannelId;
             const unsubscribe = store.subscribe(() => {
                 const next = store.getState().entities.channels.currentChannelId;
@@ -274,6 +320,7 @@
             });
             this.uninitialize = () => {
                 document.removeEventListener('click', onClick, true);
+                document.removeEventListener('mousedown', onMouseDown, true);
                 unsubscribe();
                 clear();
             };

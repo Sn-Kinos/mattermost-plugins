@@ -10,6 +10,8 @@ const posts = {
     joined: {id: 'joined', channel_id: 'c1', user_id: 'alex', type: 'system_join_channel', create_at: 150},
     far: {id: 'far', channel_id: 'c2', user_id: 'me', message: 'elsewhere', create_at: 300},
     r1: {id: 'r1', channel_id: 'c1', user_id: 'alex', root_id: 'p3', message: 'answer', create_at: 60},
+    r2: {id: 'r2', channel_id: 'c1', user_id: 'me', root_id: 'p3', message: 'follow-up', create_at: 70},
+    r3: {id: 'r3', channel_id: 'c1', user_id: 'alex', root_id: 'p3', message: 'last word', create_at: 80},
 };
 
 const loadedChannels = {
@@ -19,7 +21,8 @@ const loadedChannels = {
 
 function load({respond = () => ({ok: true, body: {root_id: 'p3'}}), crt = 'on', postsInChannel = loadedChannels, postsInThread = {}, known = posts} = {}) {
     const dom = new JSDOM(`<div id="root"></div><div id="bar"></div>
-        ${Object.keys(posts).map(id => `<div id="post_${id}"><p class="text">${id}</p><a href="#">link</a></div>`).join('')}`,
+        ${Object.keys(posts).map(id => `<div id="post_${id}"><p class="text">${id}</p><a href="#">link</a></div>`).join('')}
+        ${Object.keys(posts).map(id => `<div id="rhsPost_${id}"><p class="text">${id}</p></div>`).join('')}`,
     {runScripts: 'outside-only', url: 'https://chat.example/team-a/channels/town'});
     const {window} = dom;
     global.window = window;
@@ -74,9 +77,14 @@ function load({respond = () => ({ok: true, body: {root_id: 'p3'}}), crt = 'on', 
         [...window.document.querySelectorAll('#bar button')].find(b => b.textContent === label).click();
         await new Promise(resolve => setTimeout(resolve, 0));
     });
-    const clickPost = (id, selector = '.text') => act(() => {
-        window.document.querySelector(`#post_${id} ${selector}`).dispatchEvent(new window.MouseEvent('click', {bubbles: true, button: 0}));
+    const clickPost = (id, selector = '.text', {shiftKey = false, prefix = 'post'} = {}) => act(() => {
+        const target = window.document.querySelector(`#${prefix}_${id} ${selector}`);
+        const down = new window.MouseEvent('mousedown', {bubbles: true, cancelable: true, button: 0, shiftKey});
+        target.dispatchEvent(down);
+        mouseDownsKept.push(!down.defaultPrevented);
+        target.dispatchEvent(new window.MouseEvent('click', {bubbles: true, button: 0, shiftKey}));
     });
+    const mouseDownsKept = [];
     // Mattermost's own post click handler, which opens the thread on the right.
     const postClicks = [];
     for (const id of Object.keys(posts)) {
@@ -91,7 +99,9 @@ function load({respond = () => ({ok: true, body: {root_id: 'p3'}}), crt = 'on', 
         sockets[`custom_io.github.sn-kinos.move-to-thread_${event}`]({event, data, broadcast: {channel_id: channel}});
         await new Promise(resolve => setTimeout(resolve, 0));
     });
-    return {hover, buttons, press, barText, barButtons, barButton, clickPost, postClicks, highlighted, switchChannel, requests, dispatched, plugin, socket};
+    const selected = () => [...highlighted().matchAll(/#post_(\w+),/g)].map(match => match[1]);
+    return {hover, buttons, press, barText, barButtons, barButton, clickPost, postClicks, highlighted, selected, mouseDownsKept,
+        switchChannel, requests, dispatched, plugin, socket};
 }
 
 test('select a message from its toolbar, add more by clicking, then move them under a target', async () => {
@@ -127,6 +137,37 @@ test('select a message from its toolbar, add more by clicking, then move them un
     assert.equal(t.dispatched[0].type, 'SELECT_POST');
     assert.equal(t.dispatched[0].postId, 'p3');
     assert.equal(t.dispatched[0].channelId, 'c1');
+});
+
+test('shift-click adds every message from the last one picked, skipping system messages', async () => {
+    const t = load();
+    await t.hover('p3');
+    await t.press('답글로 옮길 메시지로 선택');
+    await t.clickPost('p2', '.text', {shiftKey: true});
+    assert.deepEqual(t.selected(), ['p3', 'p2', 'p1'], 'p3 to p2 in the channel list, without the join message');
+    assert.deepEqual(t.postClicks, [], 'the shift-click does not open the thread');
+    assert.deepEqual(t.mouseDownsKept, [false], 'the shift press does not stretch the text selection');
+
+    await t.clickPost('p1');
+    assert.deepEqual(t.selected(), ['p3', 'p2']);
+    await t.clickPost('p3', '.text', {shiftKey: true});
+    assert.deepEqual(t.selected(), ['p3', 'p2', 'p1'], 'the range starts at the message last clicked');
+});
+
+test('shift-click in the thread on the right ranges over the thread in time order', async () => {
+    const t = load({postsInThread: {p3: ['r3', 'r2', 'r1']}});
+    await t.hover('r1');
+    await t.press('답글로 옮길 메시지로 선택');
+    await t.clickPost('r3', '.text', {shiftKey: true, prefix: 'rhsPost'});
+    assert.deepEqual(t.selected(), ['r1', 'r2', 'r3']);
+});
+
+test('shift-click with the last pick in another list just toggles', async () => {
+    const t = load({postsInThread: {p3: ['r1']}});
+    await t.hover('p2');
+    await t.press('답글로 옮길 메시지로 선택');
+    await t.clickPost('r1', '.text', {shiftKey: true, prefix: 'rhsPost'});
+    assert.deepEqual(t.selected(), ['p2', 'r1']);
 });
 
 test('a failed move keeps the selection and shows the server message', async () => {
