@@ -100,7 +100,8 @@ function load({respond = () => ({ok: true, body: {root_id: 'p3'}}), crt = 'on', 
         await new Promise(resolve => setTimeout(resolve, 0));
     });
     const selected = () => [...highlighted().matchAll(/#post_(\w+),/g)].map(match => match[1]);
-    return {hover, buttons, press, barText, barButtons, barButton, clickPost, postClicks, highlighted, selected, mouseDownsKept,
+    const bodyClass = () => window.document.body.className;
+    return {hover, buttons, press, barText, barButtons, barButton, clickPost, postClicks, highlighted, selected, mouseDownsKept, bodyClass,
         switchChannel, requests, dispatched, plugin, socket};
 }
 
@@ -110,8 +111,10 @@ test('select a message from its toolbar, add more by clicking, then move them un
     assert.deepEqual(t.buttons(), ['답글로 옮길 메시지로 선택']);
     assert.equal(t.barText(), '');
 
+    assert.equal(t.bodyClass(), '');
     await t.press('답글로 옮길 메시지로 선택');
     assert.deepEqual(t.buttons(), ['선택 해제']);
+    assert.equal(t.bodyClass(), 'move-to-thread-selecting', 'Shift Actions stands aside while picking');
     assert.match(t.barText(), /^1개 선택됨/);
     assert.match(t.highlighted(), /#post_p1, #rhsPost_p1 \{background/);
 
@@ -134,6 +137,7 @@ test('select a message from its toolbar, add more by clicking, then move them un
     }]);
     assert.equal(t.barText(), '');
     assert.doesNotMatch(t.highlighted(), /#post_/);
+    assert.equal(t.bodyClass(), '');
     assert.equal(t.dispatched[0].type, 'SELECT_POST');
     assert.equal(t.dispatched[0].postId, 'p3');
     assert.equal(t.dispatched[0].channelId, 'c1');

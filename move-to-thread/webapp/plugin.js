@@ -13,6 +13,8 @@
         selection = {...selection, ...changes};
         highlight.textContent = selection.ids.map(id => `#post_${id}, #rhsPost_${id}`).join(', ') +
             (selection.ids.length ? ' {background: rgba(var(--button-bg-rgb), 0.12); box-shadow: inset 3px 0 0 var(--button-bg);}' : '');
+        // Shift Actions leaves Shift alone while this is set.
+        document.body.classList.toggle('move-to-thread-selecting', selection.ids.length > 0);
         listeners.forEach(listener => listener());
     };
     const clear = () => set({channelId: '', ids: [], anchor: '', target: null, busy: false, error: ''});

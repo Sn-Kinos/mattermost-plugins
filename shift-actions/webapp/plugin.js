@@ -14,10 +14,12 @@
         'body.shift-actions-proxy .modal:has(#deletePostModalButton), body.shift-actions-proxy .modal-backdrop {opacity: 0;}';
     document.head.append(style);
 
+    // Move to Thread marks the page while messages are being picked, and there Shift-click
+    // picks a range, so the toolbar stays as it is.
     let shift = false;
     const listeners = new Set();
     const track = event => {
-        const held = event.type !== 'blur' && event.shiftKey;
+        const held = event.type !== 'blur' && event.shiftKey && !document.body.classList.contains('move-to-thread-selecting');
         if (held === shift) return;
         shift = held;
         listeners.forEach(listener => listener());

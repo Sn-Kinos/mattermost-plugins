@@ -85,6 +85,18 @@ test('buttons appear only while Shift is held and hide every original toolbar it
     assert.deepEqual(t.labels(), []);
 });
 
+test('while Move to Thread is picking messages, Shift leaves the toolbar alone', async () => {
+    const t = load();
+    await t.render(mine);
+    t.window.document.body.classList.add('move-to-thread-selecting');
+    await t.key('keydown', true);
+    assert.deepEqual(t.labels(), []);
+
+    t.window.document.body.classList.remove('move-to-thread-selecting');
+    await t.act(() => { t.window.dispatchEvent(new t.window.MouseEvent('mousemove', {shiftKey: true})); });
+    assert.equal(t.labels().length, 9, 'once picking ends, Shift works again');
+});
+
 test("others' posts hide edit and delete unless system admin, and follow and pin state show", async () => {
     const t = load({following: true});
     await t.render(theirs);
