@@ -327,6 +327,14 @@ func TestMoveRejectsWithoutChangingAnything(t *testing.T) {
 			ids:    []string{"aaaa00000000000000000000aa"},
 			status: http.StatusBadRequest,
 		},
+		"a root with a reply out of their thread in their own channel": {
+			setup: func(api *fakeAPI) {
+				api.add("reply000000000000000000000", alex, channel, "target00000000000000000000", "answer", 250)
+			},
+			to:     channel,
+			ids:    []string{"reply000000000000000000000", "aaaa00000000000000000000aa"},
+			status: http.StatusBadRequest,
+		},
 		"a channel that does not exist": {
 			to:     "nochannel00000000000000000",
 			ids:    []string{"aaaa00000000000000000000aa"},
@@ -571,6 +579,39 @@ func TestMoveToChannelKeepsTimesAndThreadShape(t *testing.T) {
 		MovedRoots:  []string{"aaaa00000000000000000000aa"},
 		SourceRoots: []string{"source0000000000000000000a"},
 	}, api.plans[0])
+}
+
+func TestMoveRepliesOutOfTheirThreadInTheSameChannel(t *testing.T) {
+	api := newFake()
+	api.add("source0000000000000000000a", alex, channel, "", "topic", 100)
+	api.add("early00000000000000000000a", me, channel, "source0000000000000000000a", "early reply", 200)
+	api.add("stays00000000000000000000a", alex, channel, "source0000000000000000000a", "stays", 300)
+	api.add("late000000000000000000000a", alex, channel, "source0000000000000000000a", "late reply", 400)
+
+	response := channelRequest(t, api, channel, "late000000000000000000000a", "early00000000000000000000a")
+
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	assert.JSONEq(t, `{"channel_id":"channel0000000000000000000"}`, response.Body.String())
+	assert.Equal(t, map[string]string{
+		"source0000000000000000000a": "channel0000000000000000000  100",
+		"early00000000000000000000a": "channel0000000000000000000  200",
+		"stays00000000000000000000a": "channel0000000000000000000 source0000000000000000000a 300",
+		"late000000000000000000000a": "channel0000000000000000000  400",
+	}, places(api), "the chosen replies become roots at their own time and the rest stay in the thread")
+	require.Len(t, api.plans, 1)
+	assert.Equal(t, plan{
+		From: channel, To: channel, ToTeamID: team,
+		Moves: []relocation{
+			{ID: "early00000000000000000000a", RootID: "", CreateAt: 200},
+			{ID: "late000000000000000000000a", RootID: "", CreateAt: 400},
+		},
+		SourceRoots: []string{"source0000000000000000000a"},
+	}, api.plans[0])
+	ids := []string{"early00000000000000000000a", "late000000000000000000000a"}
+	assert.Equal(t, []map[string]any{{"event": "moved", "broadcast": channel, "data": map[string]any{
+		"root_id": "", "channel_id": channel, "post_ids": ids, "source_roots": []string{"source0000000000000000000a"},
+	}}}, api.events)
+	assert.Equal(t, []string{"late000000000000000000000a:late reply"}, api.updated)
 }
 
 func TestMoveToChannelTellsTheSourceOnlyWhatLeft(t *testing.T) {

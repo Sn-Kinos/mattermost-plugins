@@ -9,6 +9,7 @@ const posts = {
     p3: {id: 'p3', channel_id: 'c1', user_id: 'alex', message: 'topic', create_at: 50},
     joined: {id: 'joined', channel_id: 'c1', user_id: 'alex', type: 'system_join_channel', create_at: 150},
     far: {id: 'far', channel_id: 'c2', user_id: 'me', message: 'elsewhere', create_at: 300},
+    r1: {id: 'r1', channel_id: 'c1', user_id: 'alex', root_id: 'p3', message: 'answer', create_at: 60},
 };
 
 const loadedChannels = {
@@ -16,7 +17,7 @@ const loadedChannels = {
     c2: [{order: ['far'], recent: true}],
 };
 
-function load({respond = () => ({ok: true, body: {root_id: 'p3'}}), crt = 'on', postsInChannel = loadedChannels} = {}) {
+function load({respond = () => ({ok: true, body: {root_id: 'p3'}}), crt = 'on', postsInChannel = loadedChannels, postsInThread = {}, known = posts} = {}) {
     const dom = new JSDOM(`<div id="root"></div><div id="bar"></div>
         ${Object.keys(posts).map(id => `<div id="post_${id}"><p class="text">${id}</p><a href="#">link</a></div>`).join('')}`,
     {runScripts: 'outside-only', url: 'https://chat.example/team-a/channels/town'});
@@ -27,7 +28,7 @@ function load({respond = () => ({ok: true, body: {root_id: 'p3'}}), crt = 'on', 
     window.React = require('react');
     window.document.cookie = 'MMCSRF=token123';
     const state = {entities: {
-        posts: {posts, postsInChannel},
+        posts: {posts: known, postsInChannel, postsInThread},
         channels: {currentChannelId: 'c1'},
         teams: {currentTeamId: 't1'},
         threads: {threads: {p3: {id: 'p3', reply_count: 0, is_following: true}, s1: {id: 's1', reply_count: 2, is_following: true}}},
@@ -193,6 +194,32 @@ test('in another channel the bar moves the selection there', async () => {
     assert.deepEqual(t.dispatched, [], 'the mover is already looking at the channel');
 });
 
+test('selected replies can be taken out of their thread into their own channel', async () => {
+    const t = load({respond: () => ({ok: true, body: {channel_id: 'c1'}})});
+    await t.hover('r1');
+    await t.press('답글로 옮길 메시지로 선택');
+    assert.deepEqual(t.barButtons(), ['글타래 밖으로 꺼내기', '취소']);
+    await t.clickPost('p1');
+    assert.deepEqual(t.barButtons(), ['취소'], 'a root is already in the channel');
+    await t.clickPost('p1');
+
+    await t.barButton('글타래 밖으로 꺼내기');
+    assert.equal(t.barText(), '선택한 답글 1개를 글타래 밖으로 꺼낼까요?옮기기돌아가기');
+    await t.barButton('옮기기');
+    assert.deepEqual(plain(t.requests.map(r => r.body)), [{channel_id: 'c1', post_ids: ['r1']}]);
+    assert.equal(t.barText(), '');
+});
+
+test('from another channel the bar offers both moving here and taking the replies out', async () => {
+    const t = load();
+    await t.hover('r1');
+    await t.press('답글로 옮길 메시지로 선택');
+    await t.switchChannel('c2');
+    assert.deepEqual(t.barButtons(), ['이 채널로 옮기기', '글타래 밖으로 꺼내기', '취소']);
+    await t.barButton('글타래 밖으로 꺼내기');
+    assert.equal(t.barText(), '선택한 답글 1개를 글타래 밖으로 꺼낼까요?옮기기돌아가기');
+});
+
 test('leaving the channel while confirming a channel move goes back to the selection', async () => {
     const t = load();
     await t.hover('p1');
@@ -333,6 +360,33 @@ test('posts moved into a channel take their place there by time', async () => {
         assert.deepEqual(since.data.order, order, `collapsed threads ${crt}: only roots join the channel list`);
         assert.deepEqual(Object.keys(since.data.posts), order);
     }
+});
+
+test('replies taken out of their thread show up in the channel and the thread shows fewer replies', async () => {
+    const respond = (url, options) => ({
+        ok: true,
+        body: options.method === 'POST' ? [{...posts.r1, root_id: ''}] : {...posts.p3, reply_count: 0},
+    });
+    const t = load({respond});
+    await t.socket('moved', {root_id: '', channel_id: 'c1', post_ids: ['r1'], source_roots: ['p3']});
+
+    assert.deepEqual(t.requests.map(r => r.url), ['/api/v4/posts/ids', '/api/v4/posts/p3']);
+    assert.deepEqual(types(t.dispatched), ['POST_REMOVED', 'RECEIVED_POSTS', 'RECEIVED_POSTS_SINCE', 'RECEIVED_POST', 'RECEIVED_THREAD']);
+    assert.equal(t.dispatched[0].data.root_id, 'p3', 'removes the reply from the thread it was in');
+    assert.deepEqual(t.dispatched[2].data.order, ['r1']);
+    assert.equal(t.dispatched[4].data.thread.reply_count, 0);
+});
+
+test('a reply this screen already heard is a root still leaves the thread that lists it', async () => {
+    const t = load({
+        respond: () => ({ok: false, body: {}}),
+        postsInThread: {p3: ['r1'], s1: ['p2']},
+        known: {...posts, r1: {...posts.r1, root_id: ''}},
+    });
+    await t.socket('moved', {root_id: '', channel_id: 'c1', post_ids: ['r1'], source_roots: ['p3']});
+
+    assert.deepEqual(t.dispatched.map(a => [a.type, a.data.id, a.data.root_id]),
+        [['POST_REMOVED', 'r1', 'p3'], ['POST_REMOVED', 'r1', '']]);
 });
 
 test('a channel loaded back to its first post takes even posts older than it', async () => {

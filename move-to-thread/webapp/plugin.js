@@ -88,9 +88,15 @@
                 (setting === 'default_on' ? 'on' : 'off')) === 'on');
     };
 
+    // The resave's post_edited can arrive first and give a post its new root,
+    // so it also leaves every thread that still lists it.
     const removeKnown = (store, ids) => {
-        const known = ids.map(id => store.getState().entities.posts.posts[id]).filter(Boolean);
-        known.forEach(post => store.dispatch({type: 'POST_REMOVED', data: post}));
+        const {posts, postsInThread = {}} = store.getState().entities.posts;
+        for (const post of ids.map(id => posts[id]).filter(Boolean)) {
+            Object.keys(postsInThread).filter(root => root !== post.root_id && postsInThread[root].includes(post.id)).
+                forEach(root => store.dispatch({type: 'POST_REMOVED', data: {...post, root_id: root}}));
+            store.dispatch({type: 'POST_REMOVED', data: post});
+        }
     };
 
     // Reply counts of the threads that gained or lost replies. Followed
@@ -173,6 +179,9 @@
             channelId: data.channel_id,
         });
         placeInChannel(store, data.channel_id, moved);
+        // Replies taken out of a thread in this same channel hear no moved_out.
+        const posts = store.getState().entities.posts.posts;
+        await refreshCounts(store, [], data.source_roots.filter(id => posts[id]));
     };
 
     const moved = store => ({data}) => (data.root_id ? movedIntoThread(store, data) : movedIntoChannel(store, data));
@@ -213,8 +222,11 @@
         const count = current.ids.length;
         // Threads, drafts and similar screens have no current channel.
         const away = Boolean(channelId) && channelId !== current.channelId;
+        const posts = store.getState().entities.posts.posts;
+        const replies = current.ids.every(id => posts[id]?.root_id);
         let text = `${count}개 선택됨 · 다른 메시지를 눌러 더 고르고, 넣을 메시지에서 + 말풍선 버튼을 누르세요.`;
         if (current.target?.kind === 'thread') text = `선택한 메시지 ${count}개를 이 메시지의 답글로 옮길까요?`;
+        else if (current.target?.channelId === current.channelId) text = `선택한 답글 ${count}개를 글타래 밖으로 꺼낼까요?`;
         else if (current.target) text = `선택한 메시지 ${count}개를 이 채널로 옮길까요?`;
         else if (away) text = `${count}개 선택됨 · 넣을 메시지에서 + 말풍선 버튼을 누르거나 이 채널로 옮기세요.`;
         const action = (label, onClick, primary) => h('button', {
@@ -238,6 +250,8 @@
         h('span', null, text, current.error && h('span', {style: {display: 'block', color: 'var(--error-text)'}}, current.error)),
         current.target && action(current.busy ? '옮기는 중…' : '옮기기', () => move(store), true),
         !current.target && away && action('이 채널로 옮기기', () => set({target: {kind: 'channel', channelId}, error: ''}), true),
+        !current.target && replies && action('글타래 밖으로 꺼내기',
+            () => set({target: {kind: 'channel', channelId: current.channelId}, error: ''}), !away),
         action(current.target ? '돌아가기' : '취소', () => (current.target ? set({target: null, error: ''}) : clear())));
     };
 

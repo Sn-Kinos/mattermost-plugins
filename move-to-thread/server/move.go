@@ -70,9 +70,9 @@ type store interface {
 }
 
 // move puts the selected posts, and the replies of any selected root, under
-// the target's thread or into another channel without creating or deleting
-// a post. Mattermost's API cannot change a post's root or channel, so store
-// does it in the database.
+// the target's thread, into another channel, or out of their thread within
+// their own channel, without creating or deleting a post. Mattermost's API
+// cannot change a post's root or channel, so store does it in the database.
 func move(api API, db store, userID string, req request) (plan, error) {
 	if len(req.PostIDs) == 0 || len(req.PostIDs) > maxPosts {
 		return plan{}, reject(http.StatusBadRequest, "옮길 메시지를 1개에서 200개 사이로 골라 주세요.")
@@ -108,9 +108,6 @@ func move(api API, db store, userID string, req request) (plan, error) {
 	if err != nil {
 		return plan{}, err
 	}
-	if root == nil && from.Id == to.Id {
-		return plan{}, reject(http.StatusBadRequest, "이미 이 채널에 있는 메시지입니다.")
-	}
 	rootID := ""
 	if root != nil {
 		rootID = root.Id
@@ -118,6 +115,15 @@ func move(api API, db store, userID string, req request) (plan, error) {
 	posts, err := collect(api, userID, from.Id, rootID, req.PostIDs)
 	if err != nil {
 		return plan{}, err
+	}
+	// Within one channel only replies have somewhere to go: out of their
+	// thread, as roots.
+	if root == nil && from.Id == to.Id {
+		for _, post := range posts {
+			if post.RootId == "" {
+				return plan{}, reject(http.StatusBadRequest, "이미 이 채널에 있는 메시지입니다. 글타래 밖으로 꺼낼 답글만 골라 주세요.")
+			}
+		}
 	}
 	if from.Id != to.Id {
 		for _, post := range posts {
